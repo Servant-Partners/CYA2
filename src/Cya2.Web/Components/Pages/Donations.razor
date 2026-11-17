@@ -324,7 +324,7 @@
                                      Change="@OnAccountDropdownChanged"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                       AllowFiltering="@isAdminOrViewer"
-                                      TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))" />
+                                      TextSelector="@(account => account.DisplayName)" />
                     }
                 </div>
 
@@ -803,7 +803,7 @@
             isAdminOrViewer = user.IsInRole("Admin") ||
                               string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             presetOptions = GetPresetOptions();
 

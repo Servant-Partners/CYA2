@@ -23,8 +23,8 @@ public sealed class FundReferenceTableTests
             null!, new CacheInvalidationVersion(), null!, null!, null!, NullLogger<AdminPreloadService>.Instance);
         var data = new CacheRebuildData
         {
-            Accounts = [new Account { AccountId = 2, Fund = "Intern: Jane Doe", AccountNumber = "INT-2", BalanceAdjustment = 500 },
-                        new Account { AccountId = 3, Fund = "Intern: John Doe", AccountNumber = "INT-3" }],
+            Accounts = [new Account { AccountId = 2, Fund = "Intern: Jane Doe", AccountKind = "Intern", InternSourceId = "Jane Doe", DisplayName = "Jane Doe", BalanceAdjustment = 500 },
+                        new Account { AccountId = 3, Fund = "Intern: John Doe", AccountKind = "Intern", InternSourceId = "John Doe", DisplayName = "John Doe" }],
             DonationsByInternName = new Dictionary<string, List<DonationRecord>>(StringComparer.Ordinal)
             {
                 ["Jane Doe"] = [new DonationRecord { Amount = 10, Date = DateTime.UtcNow.Date, Fund = "Shared", InternName = "Jane Doe" }],

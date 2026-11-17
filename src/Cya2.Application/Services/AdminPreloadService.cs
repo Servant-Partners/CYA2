@@ -79,15 +79,16 @@ public sealed class AdminPreloadService : IAdminPreloadService
         foreach (var account in data.Accounts)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (InternAccountUtility.IsInternFund(account.Fund))
+            if (account.AccountKind == "Intern")
             {
-                var internDonations = InternAccountUtility.TryGetInternDesignationName(account.Fund, out var internName) &&
-                    data.DonationsByInternName.TryGetValue(internName, out var internRows)
+                var internDonations = account.InternSourceId is { } internId &&
+                    data.DonationsByInternName.TryGetValue(internId, out var internRows)
                     ? internRows
                     : [];
                 result.Add(new AdminAccountOverviewDto
                 {
                     Fund = account.Fund,
+                    DisplayName = InternAccountUtility.GetAccountSelectorDisplayName(account),
                     CurrentBalance = 0m,
                     Last12MonthsDonations = internDonations
                         .Where(row => row.Date.Date >= startDate && row.Date.Date <= endDate)
@@ -128,6 +129,7 @@ public sealed class AdminPreloadService : IAdminPreloadService
             result.Add(new AdminAccountOverviewDto
             {
                 Fund = account.Fund ?? string.Empty,
+                DisplayName = InternAccountUtility.GetAccountSelectorDisplayName(account),
                 CurrentBalance = balance.TotalBalance,
                 Last12MonthsDonations = totals.TotalDonations
             });
@@ -260,13 +262,15 @@ public sealed class AdminPreloadService : IAdminPreloadService
         {
             AccountId = reference.AccountId,
             Fund = reference.Fund,
+            AccountKind = string.IsNullOrWhiteSpace(reference.InternName) ? "Primary" : "Intern",
+            InternSourceId = string.IsNullOrWhiteSpace(reference.InternName) ? null : reference.InternName,
+            DisplayName = reference.InternDisplayName,
             CreatedAt = reference.CreatedAt,
             AccountingClass = reference.AccountingClass,
             AccountNumber = reference.AccountNumber,
             Overhead = reference.Overhead,
             SoftCredit = reference.SoftCredit,
-            BalanceAdjustment = reference.BalanceAdjustment,
-            OtherFunds = reference.OtherFunds
+            BalanceAdjustment = reference.BalanceAdjustment
         }).ToArray();
         _sharedCache.SetAccounts(_cacheInvalidationVersion.Current, accounts);
         return accounts;
@@ -316,8 +320,8 @@ public sealed class AdminPreloadService : IAdminPreloadService
             .ToList();
         var donationTask = _donationReadRepository.GetDonationsForAccountsAsync(normalAccounts, trailingStart, trailingEnd);
         var internNames = accounts
-            .Where(account => InternAccountUtility.TryGetInternDesignationName(account.Fund, out _))
-            .Select(account => { InternAccountUtility.TryGetInternDesignationName(account.Fund, out var name); return name; })
+            .Where(account => account.AccountKind == "Intern")
+            .Select(account => account.InternSourceId ?? string.Empty)
             .Distinct(StringComparer.Ordinal)
             .ToList();
         var internDonationTask = _donationReadRepository.GetInternDonationsByNamesAndDateRangeAsync(internNames, trailingStart, trailingEnd);
@@ -378,8 +382,7 @@ public sealed class AdminPreloadService : IAdminPreloadService
             CreatedAt = account.CreatedAt,
             Overhead = account.Overhead,
             SoftCredit = account.SoftCredit ?? string.Empty,
-            BalanceAdjustment = account.BalanceAdjustment,
-            OtherFunds = account.OtherFunds
+            BalanceAdjustment = account.BalanceAdjustment
         };
     }
 }

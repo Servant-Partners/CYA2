@@ -10,6 +10,8 @@ internal static class ImportCompletion
         IImportCacheInvalidator invalidator, IImportProgressService progress, ILogger logger)
     {
         result.PublicationCommitted = true;
+        try { progress.AddStep(progressId, "ImportCacheInvalidation", "ImportCacheInvalidation"); }
+        catch { logger.LogWarning("Committed import progress delivery failed."); }
         try { invalidator.Invalidate(domains); }
         catch
         {
@@ -18,6 +20,8 @@ internal static class ImportCompletion
         }
         try
         {
+            progress.CompleteStep(progressId, "ImportCacheInvalidation", "Completed");
+            if (result.Warnings.Count > 0) progress.AddErrors(progressId, result.Warnings);
             progress.CompleteStep(progressId, "Data Import", "Completed", $"{result.InsertedRows:N0} records imported");
             progress.SetStatus(progressId, result.Warnings.Count == 0 ? "Import committed" : string.Join(" ", result.Warnings));
             progress.Complete(progressId);

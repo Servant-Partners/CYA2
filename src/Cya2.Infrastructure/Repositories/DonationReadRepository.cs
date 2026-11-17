@@ -69,25 +69,36 @@ GROUP BY Fund";
     private const string DonationProjection = @"
 SELECT
     d.Id,
+    association.AccountId,
     d.DonorId,
     d.ConstituentId,
     d.IsSoftCredit,
     dn.IdentityKey AS DonorIdentityKey,
-    dn.DisplayName AS DonorDisplayName,
+    CASE WHEN d.IsAnonymous THEN 'Anonymous' ELSE dn.DisplayName END AS DonorDisplayName,
     d.Date,
     d.Frequency,
-    d.AccountName,
+    CASE WHEN d.IsAnonymous THEN '' ELSE d.AccountName END AS AccountName,
     d.PaymentMethod,
     d.GiftType,
     d.Amount,
     d.Fund,
-    d.InternName,
-    d.PrimaryAddressee AS Addressee,
-    d.SoftCreditName,
+    d.InternSourceId AS InternName,
+    CASE WHEN d.IsAnonymous THEN NULL ELSE d.PrimaryAddressee END AS Addressee,
+    CASE WHEN d.IsAnonymous THEN NULL ELSE d.SoftCreditName END AS SoftCreditName,
     d.DateCreated,
     d.IsAnonymous
 FROM DonationData d
-INNER JOIN Donors dn ON dn.Id = d.DonorId";
+INNER JOIN Donors dn ON dn.Id = d.DonorId
+INNER JOIN DonationAccountAssociations association ON association.DonationId = d.Id";
+
+    private const string NormalAccountScope = @"
+association.AccountId = @AccountId
+AND association.AllocationKind <> 'Intern'
+AND (
+    (EXISTS (SELECT 1 FROM Accounts account WHERE account.AccountId = @AccountId AND account.Fund = @Fund)
+     AND association.AllocationKind IN ('Primary', 'Merged'))
+    OR d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
+)";
 
     public async Task<List<SubAccount>> GetSubAccountsByAccountIdAsync(int accountId)
     {
@@ -118,13 +129,8 @@ INNER JOIN Donors dn ON dn.Id = d.DonorId";
             $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
-  AND d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-      SELECT @Fund
-      UNION
-      SELECT SubFund
-      FROM SubAccounts
-      WHERE AccountId = @AccountId
-  )",
+  AND association.AccountId = @AccountId
+  AND association.AllocationKind <> 'Intern'",
             new { AccountId = accountId, Fund = fundName, StartDate = startDate, EndDate = endDate });
         return rows.ToList();
     }
@@ -134,12 +140,7 @@ WHERE d.Date >= @StartDate
         _dbGuard.ThrowIfUnavailable();
         return LoadByFundsAsync(fundNames,
             $@"{DonationProjection}
-WHERE d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-   OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-        SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-        FROM SubAccounts
-        WHERE AccountId = @AccountId AND Kind = 'Merged'
-   )",
+WHERE {NormalAccountScope}",
             (fund, accountId) => new { Fund = fund, AccountId = accountId });
     }
 
@@ -149,12 +150,7 @@ WHERE d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
         await using var conn = new MySqlConnection(ConnStr);
         var rows = await conn.QueryAsync<DonationRecord>(
             $@"{DonationProjection}
-WHERE d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-   OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-        SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-        FROM SubAccounts
-        WHERE AccountId = @AccountId AND Kind = 'Merged'
-   )",
+WHERE {NormalAccountScope}",
             new { AccountId = accountId, Fund = fundName });
         return rows.ToList();
     }
@@ -166,14 +162,7 @@ WHERE d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
             $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
-  AND (
-       d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-       OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-            SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-            FROM SubAccounts
-            WHERE AccountId = @AccountId AND Kind = 'Merged'
-       )
-  )",
+  AND {NormalAccountScope}",
             (fund, accountId) => new { Fund = fund, AccountId = accountId, StartDate = startDate, EndDate = endDate });
     }
 
@@ -194,6 +183,7 @@ WHERE d.Date >= @StartDate
             $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
+  AND association.AllocationKind <> 'Intern'
   AND d.Fund COLLATE utf8mb4_0900_ai_ci IN @Funds",
             new { StartDate = startDate, EndDate = endDate, Funds = funds });
         var result = rows.ToList();
@@ -209,14 +199,7 @@ WHERE d.Date >= @StartDate
             $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
-  AND (
-       d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-       OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-            SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-            FROM SubAccounts
-            WHERE AccountId = @AccountId AND Kind = 'Merged'
-       )
-  )",
+  AND {NormalAccountScope}",
              new { AccountId = accountId, Fund = fundName, StartDate = startDate, EndDate = endDate })).ToList();
 
         if (rows.Count == 0)
@@ -229,29 +212,19 @@ SELECT
      WHERE Date >= @StartDate AND Date <= @EndDate) AS DateRows,
     (SELECT COUNT(*)
      FROM DonationData d
+     JOIN DonationAccountAssociations association ON association.DonationId = d.Id
      WHERE d.Date >= @StartDate
        AND d.Date <= @EndDate
-       AND (
-            d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-            OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-                 SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-                 FROM SubAccounts
-                 WHERE AccountId = @AccountId AND Kind = 'Merged'
-            )
-       )) AS FundDateRows,
+       AND association.AccountId = @AccountId
+       AND association.AllocationKind <> 'Intern') AS FundDateRows,
     (SELECT COUNT(*)
      FROM DonationData d
      INNER JOIN Donors dn ON dn.Id = d.DonorId
+     JOIN DonationAccountAssociations association ON association.DonationId = d.Id
      WHERE d.Date >= @StartDate
        AND d.Date <= @EndDate
-       AND (
-            d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-            OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-                 SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-                 FROM SubAccounts
-                 WHERE AccountId = @AccountId AND Kind = 'Merged'
-            )
-       )) AS DonorJoinRows",
+       AND association.AccountId = @AccountId
+       AND association.AllocationKind <> 'Intern') AS DonorJoinRows",
                 new { AccountId = accountId, Fund = fundName, StartDate = startDate, EndDate = endDate });
 
             _logger.LogWarning(
@@ -280,14 +253,7 @@ SELECT
         return LoadByFundsAsync(fundNames,
             $@"{DonationProjection}
 WHERE dn.DisplayName = @DonorName
-  AND (
-       d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-       OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-            SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-            FROM SubAccounts
-            WHERE AccountId = @AccountId AND Kind = 'Merged'
-       )
-  )",
+  AND {NormalAccountScope}",
             (fund, accountId) => new { Fund = fund, AccountId = accountId, DonorName = donorName });
     }
 
@@ -298,14 +264,7 @@ WHERE dn.DisplayName = @DonorName
         var rows = await conn.QueryAsync<DonationRecord>(
             $@"{DonationProjection}
 WHERE dn.DisplayName = @DonorName
-  AND (
-       d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-       OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-            SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-            FROM SubAccounts
-            WHERE AccountId = @AccountId AND Kind = 'Merged'
-       )
-  )",
+  AND {NormalAccountScope}",
             new { AccountId = accountId, Fund = fundName, DonorName = donorName });
         return rows.ToList();
     }
@@ -317,14 +276,7 @@ WHERE dn.DisplayName = @DonorName
         return LoadByFundsAsync(fundNames,
             $@"{DonationProjection}
 WHERE dn.DisplayName LIKE @SearchTerm
-  AND (
-       d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-       OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-            SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-            FROM SubAccounts
-            WHERE AccountId = @AccountId AND Kind = 'Merged'
-       )
-  )",
+  AND {NormalAccountScope}",
             (fund, accountId) => new { Fund = fund, AccountId = accountId, SearchTerm = likeTerm });
     }
 
@@ -336,14 +288,7 @@ WHERE dn.DisplayName LIKE @SearchTerm
         var rows = await conn.QueryAsync<DonationRecord>(
             $@"{DonationProjection}
 WHERE dn.DisplayName LIKE @SearchTerm
-  AND (
-       d.Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci
-       OR d.Fund COLLATE utf8mb4_0900_ai_ci IN (
-            SELECT SubFund COLLATE utf8mb4_0900_ai_ci
-            FROM SubAccounts
-            WHERE AccountId = @AccountId AND Kind = 'Merged'
-       )
-  )",
+  AND {NormalAccountScope}",
             new { AccountId = accountId, Fund = fundName, SearchTerm = likeTerm });
         return rows.ToList();
     }
@@ -363,7 +308,11 @@ WHERE dn.DisplayName LIKE @SearchTerm
             $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
-  AND d.InternName COLLATE utf8mb4_0900_bin = @InternName COLLATE utf8mb4_0900_bin",
+  AND association.AllocationKind = 'Intern'
+  AND association.AccountId = (
+      SELECT AccountId FROM Accounts WHERE AccountKind = 'Intern'
+      AND CAST(InternSourceId AS BINARY) = CAST(@InternName AS BINARY)
+  )",
             new { StartDate = startDate, EndDate = endDate, InternName = internName });
 
         var rowList = rows.ToList();
@@ -403,42 +352,29 @@ WHERE d.Date >= @StartDate
                 .Where(fund => !string.IsNullOrWhiteSpace(fund))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray());
-        var accountIdsByFund = fundsByAccountId
-            .SelectMany(pair => pair.Value.Select(fund => (Fund: fund, pair.Key)))
-            .GroupBy(item => item.Fund, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(item => item.Key).ToArray(),
-                StringComparer.OrdinalIgnoreCase);
-        var funds = accountIdsByFund.Keys.ToArray();
+        var accountIds = result.Keys.ToArray();
 
         const string sql = $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
-  AND d.Fund COLLATE utf8mb4_0900_ai_ci IN @Funds";
+  AND association.AllocationKind <> 'Intern'
+  AND association.AccountId IN @AccountIds";
 
         await using var connection = new MySqlConnection(ConnStr);
         var rows = (await connection.QueryAsync<DonationRecord>(
             sql,
-            new { Funds = funds, StartDate = startDate, EndDate = endDate })).ToList();
+            new { AccountIds = accountIds, StartDate = startDate, EndDate = endDate })).ToList();
 
         foreach (var row in rows)
         {
-            if (!accountIdsByFund.TryGetValue(row.Fund ?? string.Empty, out var accountIds))
-            {
-                continue;
-            }
-
-            foreach (var accountId in accountIds)
-            {
+            if (row.AccountId is { } accountId && fundsByAccountId.TryGetValue(accountId, out var funds) &&
+                funds.Contains(row.Fund, StringComparer.OrdinalIgnoreCase))
                 result[accountId].Add(row);
-            }
         }
 
         _logger.LogInformation(
-            "Normal account donations loaded in one batch: accountCount={AccountCount}, fundCount={FundCount}, rowCount={RowCount}",
+            "Normal account donations loaded in one batch: accountCount={AccountCount}, rowCount={RowCount}",
             scopedAccounts.Count,
-            funds.Length,
             rows.Count);
 
         return result;
@@ -465,7 +401,11 @@ WHERE d.Date >= @StartDate
         const string sql = $@"{DonationProjection}
 WHERE d.Date >= @StartDate
   AND d.Date <= @EndDate
-  AND d.InternName COLLATE utf8mb4_0900_bin IN @InternNames";
+  AND association.AllocationKind = 'Intern'
+  AND association.AccountId IN (
+      SELECT AccountId FROM Accounts WHERE AccountKind = 'Intern'
+      AND InternSourceId COLLATE utf8mb4_0900_bin IN @InternNames
+  )";
 
         await using var conn = new MySqlConnection(ConnStr);
         var rows = (await conn.QueryAsync<DonationRecord>(
@@ -512,7 +452,7 @@ WHERE d.Date >= @StartDate
         foreach (var fund in funds)
         {
             var accountId = await conn.ExecuteScalarAsync<int?>(
-                "SELECT AccountId FROM Accounts WHERE Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci LIMIT 1",
+                "SELECT AccountId FROM NormalDonationAccountMappings WHERE Fund COLLATE utf8mb4_0900_ai_ci = @Fund COLLATE utf8mb4_0900_ai_ci",
                 new { Fund = fund });
 
             var rows = await conn.QueryAsync<DonationRecord>(sql, parameterFactory(fund, accountId));

@@ -100,12 +100,13 @@ public class FinancialDashboardService : IFinancialDashboardService
 
     public async Task WarmInternSummaryFromDataAsync(Account sourceAccount, CacheRebuildData data, CancellationToken cancellationToken = default)
     {
-        if (!InternAccountUtility.TryGetInternDesignationName(sourceAccount.Fund, out var internName))
+        if (sourceAccount.AccountKind != "Intern" || string.IsNullOrWhiteSpace(sourceAccount.InternSourceId))
         {
             return;
         }
 
         var account = ToContextAccount(sourceAccount);
+        var internName = sourceAccount.InternSourceId;
         account.InternName = internName;
         var donations = data.DonationsByInternName.TryGetValue(internName, out var rows) ? rows : [];
         var donationData = new DonationCalculationData { Donations = donations };
@@ -324,13 +325,13 @@ public class FinancialDashboardService : IFinancialDashboardService
                         ? userContext.InternName
                         : string.IsNullOrWhiteSpace(a.InternName)
                         ? InternAccountUtility.GetDisplayFundName(a.Fund)
-                        : a.InternName,
+                        : a.DisplayName + " (Intern)",
                     AccountingClass = a.AccountingClass ?? string.Empty,
                     AccountNumber = a.AccountNumber ?? string.Empty,
                     Overhead = Convert.ToDecimal(a.Overhead),
                     IsDefault = userContext.DefaultAccountId.HasValue && a.AccountId == userContext.DefaultAccountId.Value
                 })
-                .GroupBy(a => a.SelectionKey, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(a => a.AccountId)
                 .Select(group => group.First())
                 .ToList();
 
@@ -457,12 +458,12 @@ public class FinancialDashboardService : IFinancialDashboardService
                     ? userContext.InternName
                     : string.IsNullOrWhiteSpace(a.InternName)
                     ? InternAccountUtility.GetDisplayFundName(a.Fund)
-                    : a.InternName,
+                    : a.DisplayName + " (Intern)",
                 AccountingClass = a.AccountingClass ?? string.Empty,
                 AccountNumber = a.AccountNumber ?? string.Empty,
                 Overhead = Convert.ToDecimal(a.Overhead),
                 IsDefault = userContext.DefaultAccountId.HasValue && a.AccountId == userContext.DefaultAccountId.Value
-            }).GroupBy(a => a.SelectionKey, StringComparer.OrdinalIgnoreCase)
+            }).GroupBy(a => a.AccountId)
               .Select(group => group.First())
               .ToList();
         }
@@ -499,8 +500,7 @@ public class FinancialDashboardService : IFinancialDashboardService
                 return points;
             }
 
-            if (InternAccountUtility.IsInternFund(selectedAccount.Fund) &&
-                InternAccountUtility.TryGetInternDesignationName(selectedAccount.Fund, out var internDesignationName))
+            if (!string.IsNullOrWhiteSpace(selectedAccount.InternName))
             {
                 var monthlyDonationData = await _accountCalculationService.LoadDonationCalculationDataAsync(selectedAccount, userId, startDate, endDate);
                 var internCursor = new DateTime(startDate.Year, startDate.Month, 1);
@@ -687,7 +687,7 @@ public class FinancialDashboardService : IFinancialDashboardService
         var windowStart = new DateTime(now.Year - 1, 1, 1);
         var windowEnd = new DateTime(now.Year, 12, 31);
 
-        var isInternAccount = InternAccountUtility.IsInternFund(selectedAccount.Fund);
+        var isInternAccount = !string.IsNullOrWhiteSpace(selectedAccount.InternName);
         var generation = _cacheInvalidationVersion.GetGeneration(isInternAccount
             ? CacheDataDomains.Donations | CacheDataDomains.AccountMetadata
             : CacheDataDomains.Donations | CacheDataDomains.Accounting | CacheDataDomains.AccountMetadata);
@@ -1006,14 +1006,15 @@ public class FinancialDashboardService : IFinancialDashboardService
     private static UserAccountContextAccount ToContextAccount(Account account) => new()
     {
         AccountId = account.AccountId,
+        InternName = account.AccountKind == "Intern" ? account.InternSourceId ?? string.Empty : string.Empty,
+        DisplayName = account.DisplayName ?? account.Fund,
         Fund = account.Fund ?? string.Empty,
         AccountingClass = account.AccountingClass ?? string.Empty,
         AccountNumber = account.AccountNumber ?? string.Empty,
         CreatedAt = account.CreatedAt,
         Overhead = account.Overhead,
         SoftCredit = account.SoftCredit ?? string.Empty,
-        BalanceAdjustment = account.BalanceAdjustment,
-        OtherFunds = account.OtherFunds
+        BalanceAdjustment = account.BalanceAdjustment
     };
 
     private sealed class HomeSummaryResult

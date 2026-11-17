@@ -57,8 +57,8 @@
                         AllowPaging="false"
                         EmptyText="@Localizer["NoBalancesFound"]">
             <Columns>
-                <RadzenDataGridColumn TItem="FundBalanceRow" Property="Fund" Title="@Localizer["Account"]">
-                    <Template Context="row">@InternAccountUtility.GetAccountSelectorDisplayName(row.Fund)</Template>
+                <RadzenDataGridColumn TItem="FundBalanceRow" Property="DisplayName" Title="@Localizer["Account"]">
+                    <Template Context="row">@row.DisplayName</Template>
                 </RadzenDataGridColumn>
                 @if (!showDonations12m)
                 {
@@ -195,10 +195,11 @@
                 return;
             }
             fundBalances = overview
-                .OrderBy(a => a.Fund)
+                .OrderBy(a => a.DisplayName)
                 .Select(a => new FundBalanceRow
                 {
                     Fund = a.Fund,
+                    DisplayName = string.IsNullOrWhiteSpace(a.DisplayName) ? InternAccountUtility.GetAccountSelectorDisplayName(a.Fund) : a.DisplayName,
                     CurrentBalance = a.CurrentBalance,
                     Last12MonthsDonations = a.Last12MonthsDonations
                 })
@@ -225,7 +226,7 @@
             foreach (var row in fundBalances)
             {
                 var value = showDonations12m ? row.Last12MonthsDonations : row.CurrentBalance;
-                sb.AppendLine($"{InternAccountUtility.GetAccountSelectorDisplayName(row.Fund)}\t{value}");
+                sb.AppendLine($"{row.DisplayName}\t{value}");
             }
             await JS.InvokeVoidAsync("navigator.clipboard.writeText", sb.ToString());
         }
@@ -238,6 +239,7 @@
     private sealed class FundBalanceRow
     {
         public string Fund { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
         public decimal CurrentBalance { get; set; }
         public decimal Last12MonthsDonations { get; set; }
     }

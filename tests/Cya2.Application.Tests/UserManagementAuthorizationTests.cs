@@ -295,7 +295,7 @@ public sealed class UserManagementAuthorizationTests
     }
 
     [Fact]
-    public async Task CreatingIntern_InvalidatesAuthorizationAndAccountMetadataCaches()
+    public async Task CreatingInternLogin_IsRejectedWithoutInvalidatingCaches()
     {
         var repositories = new RecordingRepositories();
         var cacheInvalidator = new RecordingCacheInvalidator();
@@ -303,22 +303,20 @@ public sealed class UserManagementAuthorizationTests
 
         var result = await service.CreateAdminUserAsync("Test Intern", "intern@scene8.net", "Intern", []);
 
-        Assert.True(result.IsSuccess);
-        Assert.Contains(CacheDataDomains.Authorization | CacheDataDomains.AccountMetadata, cacheInvalidator.InvalidatedDomains);
+        Assert.False(result.IsSuccess);
+        Assert.Empty(cacheInvalidator.InvalidatedDomains);
     }
 
     [Fact]
-    public async Task CreatingIntern_CreatesAccountWithoutAccountingClass()
+    public async Task CreatingInternLogin_DoesNotCreateAccount()
     {
         var repositories = new RecordingRepositories();
         var service = CreateService(repositories, isAdmin: true);
 
         var result = await service.CreateAdminUserAsync("Test Intern", "intern@scene8.net", "Intern", []);
 
-        Assert.True(result.IsSuccess);
-        Assert.NotNull(repositories.Accounts.AddedAccount);
-        Assert.Equal("Intern: Test Intern", repositories.Accounts.AddedAccount!.Fund);
-        Assert.Null(repositories.Accounts.AddedAccount.AccountingClass);
+        Assert.False(result.IsSuccess);
+        Assert.Null(repositories.Accounts.AddedAccount);
     }
 
     [Fact]
@@ -331,7 +329,7 @@ public sealed class UserManagementAuthorizationTests
         var result = await service.CreateAdminUserAsync("Test Intern", "intern@scene8.net", "Intern", []);
 
         Assert.False(result.IsSuccess);
-        Assert.True(result.RequiresInternAccountReuse);
+        Assert.False(result.RequiresInternAccountReuse);
         Assert.Equal(0, repositories.UserAdds);
     }
 
@@ -344,9 +342,9 @@ public sealed class UserManagementAuthorizationTests
 
         var result = await service.CreateAdminUserAsync("Test Intern", "intern@scene8.net", "Intern", [], reuseExistingInternAccount: true);
 
-        Assert.True(result.IsSuccess);
+        Assert.False(result.IsSuccess);
         Assert.Null(repositories.Accounts.AddedAccount);
-        Assert.Equal(1, repositories.AccountAccess.AccessGrants);
+        Assert.Equal(0, repositories.AccountAccess.AccessGrants);
     }
 
     [Fact]
@@ -392,7 +390,7 @@ public sealed class UserManagementAuthorizationTests
     }
 
     [Fact]
-    public async Task UpdatingInternEmail_WithUnchangedRole_Succeeds()
+    public async Task UpdatingUserToRetiredInternRole_IsRejected()
     {
         var repositories = new RecordingRepositories();
         repositories.Users.UserById = new User { Id = 3, Name = "Test Intern", Email = "intern@scene8.net", AuthLevel = "Intern" };
@@ -401,10 +399,10 @@ public sealed class UserManagementAuthorizationTests
 
         var result = await service.UpdateAdminUserAsync(new AdminUserUpdateDto { UserId = 3, Email = "changed@scene8.net", AuthLevel = "intern" });
 
-        Assert.True(result.IsSuccess);
-        Assert.Equal("changed@scene8.net", repositories.Users.UserById.Email);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("intern@scene8.net", repositories.Users.UserById.Email);
         Assert.Equal("Intern", repositories.Users.UserById.AuthLevel);
-        Assert.Equal(1, repositories.UserUpdates);
+        Assert.Equal(0, repositories.UserUpdates);
     }
 
     [Fact]

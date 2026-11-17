@@ -33,6 +33,8 @@ public sealed class CanonicalDonationWriteModel
     public required decimal Amount { get; init; }
     public required string Fund { get; init; }
     public string? InternName { get; init; }
+    public string? InternSourceId { get; init; }
+    public string? SourceEvidenceJson { get; init; }
     public string? PrimaryAddressee { get; init; }
     public string? SoftCreditName { get; init; }
     public bool IsAnonymous { get; init; }

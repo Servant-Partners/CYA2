@@ -84,18 +84,20 @@ public sealed class UserAuthorizationServiceTests
     [Fact]
     public async Task InternAuthorization_UsesCurrentlyLinkedInternAccount()
     {
-        var user = new User { Id = 7, Name = "Different Profile", AuthLevel = "Intern" };
+        var user = new User { Id = 7, Name = "Different Profile", AuthLevel = "User" };
         var access = new FakeAccountAccessRepository(new Dictionary<int, HashSet<int>>())
         {
-            Accounts = [new Account { AccountId = 12, Fund = "Intern: Jane Doe" }]
+            Accounts = [new Account { AccountId = 12, Fund = "Intern: internal-label", AccountKind = "Intern", InternSourceId = "000AbC", DisplayName = "Jane Doe" }]
         };
         var service = new UserAuthorizationService(new FakeUserRepository(user), access, NullLogger<UserAuthorizationService>.Instance);
 
-        Assert.True((await service.ValidateAccountAccessAsync("7", "Jane Doe")).IsAuthorized);
-        Assert.True((await service.ValidateAccountAccessAsync("7", "Intern: Jane Doe")).IsAuthorized);
+        Assert.True((await service.ValidateAccountAccessAsync("7", "000AbC")).IsAuthorized);
+        Assert.True((await service.ValidateAccountAccessAsync("7", "Intern: internal-label")).IsAuthorized);
+        Assert.False((await service.ValidateAccountAccessAsync("7", "000abc")).IsAuthorized);
+        Assert.False((await service.ValidateAccountAccessAsync("7", "Jane Doe")).IsAuthorized);
         Assert.False((await service.ValidateAccountAccessAsync("7", "Different Profile")).IsAuthorized);
         access.Accounts.Clear();
-        Assert.False((await service.ValidateAccountAccessAsync("7", "Jane Doe")).IsAuthorized);
+        Assert.False((await service.ValidateAccountAccessAsync("7", "000AbC")).IsAuthorized);
     }
 
     private static UserAuthorizationService CreateService(User? user, Dictionary<int, HashSet<int>> memberships)

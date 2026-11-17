@@ -206,8 +206,6 @@ namespace Cya2.Application.Services
             var rangedDonations = donations
                 .Where(d => d.Date.Date >= dateRange.StartDate.Date && d.Date.Date <= dateRange.EndDate.Date)
                 .ToList();
-            await HydrateDonorContactsAsync(rangedDonations, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
 
             var missingGiftDonors = BuildDonorSummaries(DeduplicateDonations(rangedDonations))
                 .Where(summary => summary.HasMissingGiftAlert && summary.MissingMonths.Count > 0)
@@ -220,6 +218,19 @@ namespace Cya2.Application.Services
                     MissingMonths = summary.MissingMonths.ToList()
                 })
                 .ToList();
+
+            // Classify against the complete date scope before loading contacts for warning donors only.
+            var missingGiftDonorIds = missingGiftDonors
+                .Where(donor => donor.DonorId > 0)
+                .Select(donor => donor.DonorId)
+                .ToHashSet();
+            if (missingGiftDonorIds.Count > 0)
+            {
+                await HydrateDonorContactsAsync(
+                    rangedDonations.Where(donation => missingGiftDonorIds.Contains(donation.DonorId)),
+                    cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
 
             _missingGiftCache.Set(
                 account.AccountId,

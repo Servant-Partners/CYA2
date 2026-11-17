@@ -39,13 +39,13 @@ public sealed class CacheRebuildService : ICacheRebuildService
         cancellationToken.ThrowIfCancellationRequested();
 
         var internAccounts = preload.Accounts
-            .Where(account => InternAccountUtility.TryGetInternDesignationName(account.Fund, out _))
+            .Where(account => account.AccountKind == "Intern")
             .ToList();
         var standardAccounts = preload.Accounts
             .Where(account => !InternAccountUtility.IsInternFund(account.Fund))
             .ToList();
         var internNames = internAccounts
-            .Select(account => { InternAccountUtility.TryGetInternDesignationName(account.Fund, out var name); return name; })
+            .Select(account => account.InternSourceId ?? string.Empty)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -127,7 +127,8 @@ public sealed class CacheRebuildService : ICacheRebuildService
         SemaphoreSlim throttler,
         CancellationToken cancellationToken)
     {
-        var isIntern = InternAccountUtility.TryGetInternDesignationName(account.Fund, out var internName);
+        var isIntern = account.AccountKind == "Intern";
+        var internName = account.InternSourceId ?? string.Empty;
         if (!(isIntern
                 ? data.DonationsByInternName.TryGetValue(internName, out var donations)
                 : data.DonationsByAccountId.TryGetValue(account.AccountId, out donations)))

@@ -46,6 +46,8 @@ public class UserSettingsService : IUserSettingsService
                 {
                     AccountId = a.AccountId,
                     Fund = a.Fund ?? string.Empty,
+                    InternName = a.InternName,
+                    DisplayName = string.IsNullOrWhiteSpace(a.InternName) ? a.DisplayName : a.DisplayName + " (Intern)",
                     AccountingClass = a.AccountingClass ?? string.Empty,
                     AccountNumber = a.AccountNumber ?? string.Empty,
                     Overhead = Convert.ToDecimal(a.Overhead)

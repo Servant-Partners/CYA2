@@ -34,20 +34,10 @@ public sealed class UserAuthorizationService : IUserAuthorizationService
             return user;
         }
 
-        var resolvedUser = await ResolveUserAsync(userIdentifier);
-        if (resolvedUser?.IsIntern() == true)
-        {
-            var linkedAccounts = await _userAccountAccessRepository.GetUserAccountsAsync(user.UserId);
-            return linkedAccounts.Any(account =>
-                    InternAccountUtility.TryGetInternDesignationName(account.Fund, out var internName) &&
-                    (string.Equals(internName, accountFund, StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(account.Fund, accountFund, StringComparison.OrdinalIgnoreCase)))
-                ? user
-                : user with { IsAuthorized = false, Reason = "User is not assigned to this account." };
-        }
-
         var account = await _userAccountAccessRepository.GetUserAccountsAsync(user.UserId);
-        return account.Any(a => string.Equals(a.Fund, accountFund, StringComparison.OrdinalIgnoreCase))
+        return account.Any(a => a.AccountKind == "Intern"
+                ? string.Equals(a.InternSourceId, accountFund, StringComparison.Ordinal) || string.Equals(a.Fund, accountFund, StringComparison.Ordinal)
+                : string.Equals(a.Fund, accountFund, StringComparison.OrdinalIgnoreCase))
             ? user
             : user with { IsAuthorized = false, Reason = "User is not assigned to this account." };
     }

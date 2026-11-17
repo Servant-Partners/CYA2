@@ -46,10 +46,10 @@ public sealed partial class DonationRepository : IDonationRepository
 INSERT INTO DonationDataBackup
     (BackupId, Id, DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType,
      Amount, Fund, InternName, PrimaryAddressee, SoftCreditName,
-     IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, BackupAt, Pinned, SourceRangeStart)
+     IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson, BackupAt, Pinned, SourceRangeStart)
 SELECT @BackupId, Id, DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType,
        Amount, Fund, InternName, PrimaryAddressee, SoftCreditName,
-       IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, UTC_TIMESTAMP(), 0, @SourceRangeStart
+       IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson, UTC_TIMESTAMP(), 0, @SourceRangeStart
 FROM DonationData";
                 backup.Parameters.AddWithValue("@BackupId", backupId);
                 backup.Parameters.AddWithValue("@SourceRangeStart", fromDate);
@@ -393,9 +393,15 @@ WHERE IdentityKey = @IdentityKey";
         }
     }
 
-    public async Task<DonationImportPersistenceResult> ReplaceCanonicalDonationsAsync(
+    public Task<DonationImportPersistenceResult> ReplaceCanonicalDonationsAsync(
         IReadOnlyList<CanonicalDonationWriteModel> donations,
         CancellationToken cancellationToken)
+        => ReplaceCanonicalDonationsAsync(donations, cancellationToken, _ => { });
+
+    public async Task<DonationImportPersistenceResult> ReplaceCanonicalDonationsAsync(
+        IReadOnlyList<CanonicalDonationWriteModel> donations,
+        CancellationToken cancellationToken,
+        Action<DonationPersistenceProgress> reportProgress)
     {
         _dbGuard.ThrowIfUnavailable();
         cancellationToken.ThrowIfCancellationRequested();
@@ -405,36 +411,45 @@ WHERE IdentityKey = @IdentityKey";
         }
 
         _logger.LogInformation("Canonical donation set-based batch persistence starting. BatchCount={BatchCount}", donations.Count);
+        reportProgress(new("ImportDatabaseLock"));
         await using var connection = new MySqlConnection(ConnectionString);
         await connection.OpenAsync(cancellationToken);
         await FinancialWriteCoordinator.AcquireDatabaseLockAsync(connection, cancellationToken);
         try
         {
-            var retained = await ResolveSharedIdentitiesAsync(connection, donations, cancellationToken);
+            reportProgress(new("ImportStaging"));
             await CreateCanonicalImportStageAsync(connection, null, cancellationToken);
             _logger.LogInformation("Canonical donation staging tables created. BatchCount={BatchCount}", donations.Count);
             await InsertDonorStageAsync(connection, null, donations, cancellationToken);
+            reportProgress(new("ImportStagingDonations"));
             _logger.LogInformation("Canonical donor stage populated. BatchCount={BatchCount}", donations.Count);
             await InsertDonationStageAsync(connection, null, donations, cancellationToken);
             _logger.LogInformation("Canonical donation stage populated. BatchCount={BatchCount}", donations.Count);
-            await InsertContactStageAsync(connection, null, donations, cancellationToken);
-            _logger.LogInformation("Canonical contact stage populated. BatchCount={BatchCount}", donations.Count);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
             var backupId = Guid.NewGuid().ToString();
             try
             {
+            reportProgress(new("ImportAffectedHistory"));
+            await CaptureAffectedGroupsAsync(connection, transaction, donations.Min(row => row.Date), cancellationToken);
+            reportProgress(new("ImportSnapshot"));
             await BackupAndDeleteFromDateAsync(connection, transaction, donations.Min(row => row.Date), backupId, cancellationToken);
+            reportProgress(new("ImportDonorWrites"));
             await UpsertStagedDonorsAsync(connection, transaction, cancellationToken);
-            await RelinkRetainedDonationsAsync(connection, transaction, retained, cancellationToken);
             _logger.LogInformation("Canonical staged donors upserted. BatchCount={BatchCount}", donations.Count);
 
+            reportProgress(new("ImportDonationWrites"));
             var inserted = await InsertStagedDonationsAsync(connection, transaction, cancellationToken);
             _logger.LogInformation("Canonical staged donations inserted. BatchCount={BatchCount}, Inserted={Inserted}", donations.Count, inserted);
+            reportProgress(new("ImportContactEvidence"));
+            await RebuildAffectedProjectionsAsync(connection, transaction, cancellationToken, reportProgress);
+            reportProgress(new("ImportContactWrites"));
             var contactsAdded = await ReconcileStagedContactsAsync(connection, transaction, cancellationToken);
-            await FinalizeSharedIdentitiesAsync(connection, transaction, cancellationToken);
+            reportProgress(new("ImportFrequencyHistory"));
+            await ReclassifyAffectedGroupsAsync(connection, transaction, cancellationToken, reportProgress);
 
             _logger.LogInformation("Canonical donation set-based rows and contacts prepared. BatchCount={BatchCount}, Inserted={Inserted}, ContactsAdded={ContactsAdded}", donations.Count, inserted, contactsAdded);
             if (inserted != donations.Count) throw new InvalidOperationException("Staged donation count did not match publication count.");
+            reportProgress(new("ImportCommit"));
             await TransactionalAudit.RecordAsync(connection, transaction, Cya2.Application.Interfaces.AuditEventTypes.DonationImportCompleted, _logger, inserted, cancellationToken: cancellationToken);
             await ImportTransaction.CommitAsync(transaction, ConnectionString, "DonationBackupSnapshots", backupId, cancellationToken);
             _logger.LogInformation("Canonical donation set-based transaction committed. BatchCount={BatchCount}, Inserted={Inserted}, ContactsAdded={ContactsAdded}", donations.Count, inserted, contactsAdded);
@@ -476,6 +491,7 @@ CREATE TEMPORARY TABLE TempImportDonors
     ConstituentId VARCHAR(255) COLLATE utf8mb4_bin NULL,
     HasDirect BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (StageId),
+    UNIQUE KEY uq_TempImportDonors_Identity (IdentityKey),
     KEY ix_TempImportDonors_Lookup (Fund(100), IdentityKey(200))
 ) ENGINE=InnoDB;
 CREATE TEMPORARY TABLE TempImportDonations
@@ -490,6 +506,8 @@ CREATE TEMPORARY TABLE TempImportDonations
     GiftType VARCHAR(255) NOT NULL,
     Amount DECIMAL(18,2) NOT NULL,
     InternName VARCHAR(255) NULL,
+    InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+    SourceEvidenceJson JSON NULL,
     PrimaryAddressee VARCHAR(255) NULL,
     SoftCreditName VARCHAR(255) NULL,
     IsAnonymous BOOLEAN NOT NULL,
@@ -524,23 +542,26 @@ CREATE TEMPORARY TABLE TempImportContacts
             .GroupBy(donation => donation.Donor.IdentityKey, StringComparer.Ordinal)
             .Select(group => (Donor: (group.LastOrDefault(row => !row.IsSoftCredit && !row.IsAnonymous) ?? group.Last()).Donor, HasDirect: group.Any(row => !row.IsSoftCredit && !row.IsAnonymous)))
             .ToList();
-        var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandTimeout = ImportCommandTimeoutSeconds;
-        var values = new StringBuilder();
-        for (var index = 0; index < donors.Count; index++)
+        foreach (var chunk in donors.Chunk(250))
         {
-            if (index > 0) values.Append(',');
-            values.Append($"('', @di{index}, @dn{index}, @ds{index}, @dv{index}, @dc{index}, @dd{index})");
-            command.Parameters.AddWithValue($"@di{index}", donors[index].Donor.IdentityKey);
-            command.Parameters.AddWithValue($"@dn{index}", donors[index].Donor.DisplayName);
-            command.Parameters.AddWithValue($"@ds{index}", donors[index].Donor.ResolutionSource);
-            command.Parameters.AddWithValue($"@dv{index}", donors[index].Donor.ResolutionVersion);
-            command.Parameters.AddWithValue($"@dc{index}", (object?)donors[index].Donor.ConstituentId ?? DBNull.Value);
-            command.Parameters.AddWithValue($"@dd{index}", donors[index].HasDirect);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandTimeout = ImportCommandTimeoutSeconds;
+            var values = new StringBuilder();
+            for (var index = 0; index < chunk.Length; index++)
+            {
+                if (index > 0) values.Append(',');
+                values.Append($"('', @di{index}, @dn{index}, @ds{index}, @dv{index}, @dc{index}, @dd{index})");
+                command.Parameters.AddWithValue($"@di{index}", chunk[index].Donor.IdentityKey);
+                command.Parameters.AddWithValue($"@dn{index}", chunk[index].Donor.DisplayName);
+                command.Parameters.AddWithValue($"@ds{index}", chunk[index].Donor.ResolutionSource);
+                command.Parameters.AddWithValue($"@dv{index}", chunk[index].Donor.ResolutionVersion);
+                command.Parameters.AddWithValue($"@dc{index}", (object?)chunk[index].Donor.ConstituentId ?? DBNull.Value);
+                command.Parameters.AddWithValue($"@dd{index}", chunk[index].HasDirect);
+            }
+            command.CommandText = $"INSERT INTO TempImportDonors (Fund, IdentityKey, DisplayName, ResolutionSource, ResolutionVersion, ConstituentId, HasDirect) VALUES {values}";
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
-        command.CommandText = $"INSERT INTO TempImportDonors (Fund, IdentityKey, DisplayName, ResolutionSource, ResolutionVersion, ConstituentId, HasDirect) VALUES {values}";
-        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task InsertDonationStageAsync(
@@ -561,7 +582,7 @@ CREATE TEMPORARY TABLE TempImportContacts
             {
                 var parameterIndex = localIndex;
                 if (localIndex > 0) values.Append(',');
-                values.Append($"(@f{parameterIndex}, @i{parameterIndex}, @d{parameterIndex}, @g{parameterIndex}, @a{parameterIndex}, @p{parameterIndex}, @t{parameterIndex}, @m{parameterIndex}, @n{parameterIndex}, @r{parameterIndex}, @s{parameterIndex}, @x{parameterIndex}, @q{parameterIndex}, @c{parameterIndex}, @sr{parameterIndex}, @sc{parameterIndex})");
+                values.Append($"(@f{parameterIndex}, @i{parameterIndex}, @d{parameterIndex}, @g{parameterIndex}, @a{parameterIndex}, @p{parameterIndex}, @t{parameterIndex}, @m{parameterIndex}, @n{parameterIndex}, @r{parameterIndex}, @s{parameterIndex}, @x{parameterIndex}, @q{parameterIndex}, @c{parameterIndex}, @sr{parameterIndex}, @sc{parameterIndex}, @intern{parameterIndex}, @evidence{parameterIndex})");
                 var donation = donations[offset + localIndex];
                 command.Parameters.AddWithValue($"@f{parameterIndex}", donation.Fund);
                 command.Parameters.AddWithValue($"@i{parameterIndex}", donation.Donor.IdentityKey);
@@ -579,42 +600,10 @@ CREATE TEMPORARY TABLE TempImportContacts
                 command.Parameters.AddWithValue($"@c{parameterIndex}", (object?)donation.ConstituentId ?? DBNull.Value);
                 command.Parameters.AddWithValue($"@sr{parameterIndex}", (object?)donation.SoftCreditRecipientId ?? DBNull.Value);
                 command.Parameters.AddWithValue($"@sc{parameterIndex}", donation.IsSoftCredit);
+                command.Parameters.AddWithValue($"@intern{parameterIndex}", (object?)donation.InternSourceId ?? DBNull.Value);
+                command.Parameters.AddWithValue($"@evidence{parameterIndex}", (object?)donation.SourceEvidenceJson ?? DBNull.Value);
             }
-            command.CommandText = $"INSERT INTO TempImportDonations (Fund, IdentityKey, Date, GiftImportId, AccountName, PaymentMethod, GiftType, Amount, InternName, PrimaryAddressee, SoftCreditName, IsAnonymous, Frequency, ConstituentId, SoftCreditRecipientId, IsSoftCredit) VALUES {values}";
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
-    }
-
-    private static async Task InsertContactStageAsync(
-        MySqlConnection connection,
-        MySqlTransaction? transaction,
-        IReadOnlyList<CanonicalDonationWriteModel> donations,
-        CancellationToken cancellationToken)
-    {
-        var contacts = donations
-            .Where(donation => !donation.IsSoftCredit && !donation.IsAnonymous)
-            .SelectMany(donation => donation.Contacts.Select(contact => (Fund: string.Empty, donation.Donor.IdentityKey, Contact: contact)))
-            .DistinctBy(item => (item.Fund, item.IdentityKey, item.Contact.ContactType, item.Contact.NormalizedValue))
-            .ToList();
-        const int chunkSize = 500;
-        for (var offset = 0; offset < contacts.Count; offset += chunkSize)
-        {
-            var chunk = contacts.Skip(offset).Take(chunkSize).ToList();
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandTimeout = ImportCommandTimeoutSeconds;
-            var values = new StringBuilder();
-            for (var index = 0; index < chunk.Count; index++)
-            {
-                if (index > 0) values.Append(',');
-                values.Append($"(@cf{index}, @ci{index}, @ct{index}, @cv{index}, @cn{index})");
-                command.Parameters.AddWithValue($"@cf{index}", chunk[index].Fund);
-                command.Parameters.AddWithValue($"@ci{index}", chunk[index].IdentityKey);
-                command.Parameters.AddWithValue($"@ct{index}", chunk[index].Contact.ContactType);
-                command.Parameters.AddWithValue($"@cv{index}", chunk[index].Contact.ContactValue);
-                command.Parameters.AddWithValue($"@cn{index}", chunk[index].Contact.NormalizedValue);
-            }
-            command.CommandText = $"INSERT INTO TempImportContacts (Fund, IdentityKey, ContactType, ContactValue, NormalizedValue) VALUES {values}";
+            command.CommandText = $"INSERT INTO TempImportDonations (Fund, IdentityKey, Date, GiftImportId, AccountName, PaymentMethod, GiftType, Amount, InternName, PrimaryAddressee, SoftCreditName, IsAnonymous, Frequency, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson) VALUES {values}";
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
     }
@@ -637,9 +626,9 @@ ON DUPLICATE KEY UPDATE
         return await ExecuteImportCommandAsync(connection, transaction, @"
 INSERT INTO DonationData
     (DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType, Amount, Fund,
-     InternName, PrimaryAddressee, SoftCreditName, IsAnonymous, Frequency, ConstituentId, SoftCreditRecipientId, IsSoftCredit)
+     InternName, PrimaryAddressee, SoftCreditName, IsAnonymous, Frequency, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson)
 SELECT d.Id, s.Date, s.GiftImportId, s.AccountName, s.PaymentMethod, s.GiftType, s.Amount, s.Fund,
-       s.InternName, s.PrimaryAddressee, s.SoftCreditName, s.IsAnonymous, s.Frequency, s.ConstituentId, s.SoftCreditRecipientId, s.IsSoftCredit
+       s.InternName, s.PrimaryAddressee, s.SoftCreditName, s.IsAnonymous, s.Frequency, s.ConstituentId, s.SoftCreditRecipientId, s.IsSoftCredit, s.InternSourceId, s.SourceEvidenceJson
 FROM TempImportDonations s
 JOIN Donors d ON d.IdentityKey = s.IdentityKey;", cancellationToken);
     }

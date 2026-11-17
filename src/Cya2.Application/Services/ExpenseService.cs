@@ -87,6 +87,16 @@ public class ExpenseService : IExpenseService
                 };
             }
 
+            if (!string.IsNullOrWhiteSpace(selectedAccount.InternName))
+                return new ExpenseDataDto
+                {
+                    UserAccounts = contextAccounts.Select(MapToAccountOptionDto).ToList(),
+                    CanSearchAccounts = context.IsAdminOrViewer,
+                    SelectedAccount = selectedAccount.InternName,
+                    DateRangeStart = dateRange.StartDate,
+                    DateRangeEnd = dateRange.EndDate
+                };
+
             var accountingData = await LoadAccountingDataAsync(selectedAccount, dateRange, userId);
 
             var categorized = _accountingTransactionProcessor.Process(selectedAccount, accountingData);
@@ -241,7 +251,7 @@ public class ExpenseService : IExpenseService
             InternName = account.InternName ?? (InternAccountUtility.TryGetInternDesignationName(account.Fund, out var internName)
                 ? internName
                 : string.Empty),
-            DisplayName = InternAccountUtility.GetAccountSelectorDisplayName(account.Fund),
+            DisplayName = string.IsNullOrWhiteSpace(account.InternName) ? InternAccountUtility.GetAccountSelectorDisplayName(account.Fund) : account.DisplayName + " (Intern)",
             AccountingClass = account.AccountingClass ?? string.Empty,
             AccountNumber = account.AccountNumber ?? string.Empty,
             Overhead = Convert.ToDecimal(account.Overhead)

@@ -128,8 +128,7 @@ public sealed class AdminRecentAccountSnapshotService : IAdminRecentAccountSnaps
                 CreatedAt = account.CreatedAt,
                 Overhead = account.Overhead,
                 SoftCredit = account.SoftCredit ?? string.Empty,
-                BalanceAdjustment = account.BalanceAdjustment,
-                OtherFunds = account.OtherFunds
+                BalanceAdjustment = account.BalanceAdjustment
             };
 
             var queryRange = GetSnapshotQueryRange();

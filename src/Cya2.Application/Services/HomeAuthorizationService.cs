@@ -29,7 +29,7 @@ public sealed class HomeAuthorizationService : IHomeAuthorizationService
         var selectedAccount = hasRequestedAccount
             ? context.Accounts.FirstOrDefault(account =>
                 string.Equals(account.Fund, preferredFund, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(account.InternName, preferredFund, StringComparison.OrdinalIgnoreCase))
+                string.Equals(account.InternName, preferredFund, StringComparison.Ordinal))
             : _accountContextService.ResolveSelectedAccount(
                 context,
                 // Intern home views select by intern identity because the fund is not a unique donation-data key.

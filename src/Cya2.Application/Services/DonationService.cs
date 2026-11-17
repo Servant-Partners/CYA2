@@ -64,13 +64,11 @@ public class DonationService : IDonationService
                 AccountId = a.AccountId,
                 Fund = a.Fund,
                 InternName = context.IsIntern ? context.InternName : a.InternName,
-                DisplayName = context.IsIntern
-                    ? context.InternName
-                    : string.IsNullOrWhiteSpace(a.InternName) ? a.DisplayName : a.InternName,
+                DisplayName = string.IsNullOrWhiteSpace(a.InternName) ? a.DisplayName : a.DisplayName + " (Intern)",
                 AccountingClass = a.AccountingClass,
                 AccountNumber = a.AccountNumber,
                 Overhead = a.Overhead
-            }).GroupBy(a => a.SelectionKey, StringComparer.OrdinalIgnoreCase)
+            }).GroupBy(a => a.AccountId)
               .Select(group => group.First())
               .ToList();
 
@@ -230,7 +228,7 @@ public class DonationService : IDonationService
             result.Donations = donationRecords.Select(r => new DonationRowDto
             {
                 Date = r.Date,
-                Account = selectedIsInternAccount ? result.SelectedAccount : r.Fund,
+                Account = selectedIsInternAccount ? selected?.DisplayName ?? string.Empty : r.Fund,
                 DonorId = r.DonorId,
                 Donor = ResolveDonorDisplayName(r),
                 Amount = r.Amount,

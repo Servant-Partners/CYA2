@@ -17,17 +17,20 @@ CREATE TABLE IF NOT EXISTS Accounts
 (
 	AccountId INT NOT NULL AUTO_INCREMENT,
 	Fund VARCHAR(255) NOT NULL,
+	AccountKind VARCHAR(32) NOT NULL DEFAULT 'Primary',
+	InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	DisplayName VARCHAR(255) NULL,
 	AccountingClass VARCHAR(255) NULL,
-	AccountNumber VARCHAR(255) NOT NULL,
+	AccountNumber VARCHAR(255) NULL,
 	CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	Overhead DECIMAL(10,2) NOT NULL DEFAULT 0.00,
 	SoftCredit VARCHAR(255) NOT NULL DEFAULT '',
 	BalanceAdjustment DECIMAL(18,2) NOT NULL DEFAULT 0.00,
-	OtherFunds BOOLEAN NOT NULL DEFAULT FALSE,
 	PRIMARY KEY (AccountId),
 	UNIQUE KEY uq_accounts_fund (Fund),
 	UNIQUE KEY uq_accounts_account_number (AccountNumber),
-	UNIQUE KEY uq_accounts_accounting_class (AccountingClass)
+	UNIQUE KEY uq_accounts_accounting_class (AccountingClass),
+	UNIQUE KEY uq_accounts_intern_source (InternSourceId)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_0900_ai_ci;
@@ -147,6 +150,8 @@ CREATE TABLE IF NOT EXISTS DonationData
 	Amount DECIMAL(18,2) NOT NULL,
 	Fund VARCHAR(255) NOT NULL,
 	InternName VARCHAR(255) NULL,
+	InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	SourceEvidenceJson JSON NULL,
 	PrimaryAddressee VARCHAR(255) NULL,
 	SoftCreditName VARCHAR(255) NULL,
 	IsAnonymous BOOLEAN NOT NULL DEFAULT FALSE,
@@ -203,6 +208,8 @@ CREATE TABLE IF NOT EXISTS DonationDataBackup
 	Amount DECIMAL(18,2) NOT NULL,
 	Fund VARCHAR(255) NOT NULL,
 	InternName VARCHAR(255) NULL,
+	InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	SourceEvidenceJson JSON NULL,
 	PrimaryAddressee VARCHAR(255) NULL,
 	SoftCreditName VARCHAR(255) NULL,
 	IsAnonymous BOOLEAN NOT NULL DEFAULT FALSE,
@@ -327,3 +334,33 @@ CREATE TABLE IF NOT EXISTS AuditEvents
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_0900_ai_ci;
+
+-- Associations follow current configuration without rewriting monetary/source data.
+-- A designation configured for different accounts is deliberately unresolved.
+CREATE OR REPLACE SQL SECURITY INVOKER VIEW NormalDonationAccountMappings AS
+SELECT candidates.Fund, MIN(candidates.AccountId) AS AccountId,
+	   CASE WHEN MAX(candidates.IsPrimary) = 1 THEN 'Primary'
+			WHEN MAX(candidates.IsMerged) = 1 THEN 'Merged' ELSE 'Separate' END AS AllocationKind
+FROM (
+	SELECT Fund, AccountId, 1 AS IsPrimary, 0 AS IsMerged
+	FROM Accounts WHERE AccountKind <> 'Intern'
+	UNION ALL
+	SELECT sub.SubFund, sub.AccountId, 0, CASE WHEN sub.Kind = 'Merged' THEN 1 ELSE 0 END
+	FROM SubAccounts sub JOIN Accounts account ON account.AccountId = sub.AccountId
+	WHERE account.AccountKind <> 'Intern' AND sub.Kind IN ('Merged', 'Separate')
+) candidates
+GROUP BY candidates.Fund
+HAVING COUNT(DISTINCT candidates.AccountId) = 1;
+
+-- Nonblank intern source IDs never fall back to normal fund association.
+CREATE OR REPLACE SQL SECURITY INVOKER VIEW DonationAccountAssociations AS
+SELECT donation.Id AS DonationId, mapping.AccountId, mapping.AllocationKind
+FROM DonationData donation
+JOIN NormalDonationAccountMappings mapping ON mapping.Fund = donation.Fund
+WHERE donation.InternSourceId IS NULL OR donation.InternSourceId = ''
+UNION ALL
+SELECT donation.Id, account.AccountId, 'Intern'
+FROM DonationData donation
+JOIN Accounts account ON account.AccountKind = 'Intern'
+	AND CAST(account.InternSourceId AS BINARY) = CAST(donation.InternSourceId AS BINARY)
+WHERE donation.InternSourceId IS NOT NULL AND donation.InternSourceId <> '';

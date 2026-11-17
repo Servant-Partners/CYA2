@@ -102,19 +102,24 @@
                     <AccountSelector TItem="AccountOptionDto" TValue="string"
                                      Data="@((expenseData.UserAccounts ?? new List<AccountOptionDto>()))"
                                      TextProperty="DisplayName"
-                                     ValueProperty="Fund"
+                                     ValueProperty="SelectionKey"
                                      Value="@selectedAccount"
                                      ValueChanged="@(value => selectedAccount = value)"
                                      Change="@(async args => await AccountSelection(args?.ToString()))"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                       AllowFiltering="@canAccessAllAccounts"
-                                      TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))"
+                                      TextSelector="@(account => account.DisplayName)"
                                      Class="account-selector-dropdown-inline" />
                     }
                 </div>
             </div>
         </RadzenStack>
     </RadzenStack>
+
+    @if (expenseData.UserAccounts.Any(account => account.SelectionKey == selectedAccount && !string.IsNullOrWhiteSpace(account.InternName)))
+    {
+        <div role="status">Intern accounts contain donation and donor data only. There are no expenses or accounting transactions to display. Select a primary account to view expenses.</div>
+    }
 
     <!-- Summary cards and grids layout -->
     <div class="page-two-col-layout">
@@ -297,7 +302,7 @@
                                   string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase) ||
                                   string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
             canAccessAllAccounts = isAdminOrViewer;
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             presetOptions = GetPresetOptions();
             dateRangeState = DateRangeStateService.InitializeDateRange(SessionUserStateService);
@@ -319,12 +324,12 @@
             }
             else if (string.IsNullOrEmpty(selectedAccount) && expenseData.UserAccounts.Any())
             {
-                selectedAccount = expenseData.UserAccounts.First().Fund;
+                selectedAccount = expenseData.UserAccounts.First().SelectionKey;
             }
 
             var defaultFundFromDto = !string.IsNullOrWhiteSpace(SessionUserStateService.DefaultAccountFund)
                 ? SessionUserStateService.DefaultAccountFund
-                : expenseData.UserAccounts.FirstOrDefault()?.Fund ?? string.Empty;
+                : expenseData.UserAccounts.FirstOrDefault()?.SelectionKey ?? string.Empty;
 
             // Only overwrite session state if the caller passed a non-empty account parameter (explicit selection)
             if (!string.IsNullOrWhiteSpace(passedAccount))
@@ -441,12 +446,12 @@
             }
             else if (string.IsNullOrEmpty(selectedAccount) && expenseData.UserAccounts.Any())
             {
-                selectedAccount = expenseData.UserAccounts.First().Fund;
+                selectedAccount = expenseData.UserAccounts.First().SelectionKey;
             }
 
             var defaultFundFromDto = !string.IsNullOrWhiteSpace(SessionUserStateService.DefaultAccountFund)
                 ? SessionUserStateService.DefaultAccountFund
-                : expenseData.UserAccounts.FirstOrDefault()?.Fund ?? string.Empty;
+                : expenseData.UserAccounts.FirstOrDefault()?.SelectionKey ?? string.Empty;
 
             // Only overwrite session state if the caller passed a non-empty account parameter (explicit selection)
             if (!string.IsNullOrWhiteSpace(selectedAccount))
@@ -476,7 +481,7 @@
         if (string.IsNullOrWhiteSpace(accountName)) return;
 
         var selectedAccountDto = expenseData.UserAccounts.FirstOrDefault(account =>
-            string.Equals(account.Fund, accountName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(account.SelectionKey, accountName, string.IsNullOrWhiteSpace(account.InternName) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
         if (selectedAccountDto is not null)
         {
             var account = new UserAccountContextAccount

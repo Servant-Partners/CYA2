@@ -35,10 +35,11 @@ public sealed class AccountSelectionCoordinator : IAccountSelectionCoordinator
             throw new UnauthorizedAccessException(authorization.Reason);
         }
 
-        _sessionUserState.SelectedAccountFund = account.Fund ?? string.Empty;
+        var selection = string.IsNullOrWhiteSpace(account.InternName) ? account.Fund ?? string.Empty : account.InternName;
+        _sessionUserState.SelectedAccountFund = selection;
         if (persistSelection && !string.IsNullOrWhiteSpace(userId))
         {
-            _userSelectionService.SetSelectedAccount(userId, account.Fund ?? string.Empty);
+            _userSelectionService.SetSelectedAccount(userId, selection);
         }
 
         await _warmupService.WarmSelectedAccountAsync(

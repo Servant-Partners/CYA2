@@ -267,8 +267,7 @@ public class AccountCalculationService : IAccountCalculationService
             CreatedAt = account.CreatedAt,
             Overhead = account.Overhead,
             SoftCredit = account.SoftCredit,
-            BalanceAdjustment = account.BalanceAdjustment,
-            OtherFunds = account.OtherFunds
+            BalanceAdjustment = account.BalanceAdjustment
         };
     }
 }

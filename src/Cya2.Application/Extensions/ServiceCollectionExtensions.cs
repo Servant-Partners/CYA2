@@ -66,6 +66,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAccountAccessListingService, AccountAccessListingService>();
         services.AddScoped<AdminFundReadService>();
         services.AddScoped<AdminFundWriteService>();
+        services.AddScoped<InternAccountService>();
         services.AddScoped<IAdminPreloadService, AdminPreloadService>();
         services.AddScoped<IAccountSnapshotWarmupService, AccountSnapshotWarmupService>();
         services.AddScoped<IAdminRecentAccountSnapshotService, AdminRecentAccountSnapshotService>();

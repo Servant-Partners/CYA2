@@ -415,10 +415,11 @@ public sealed class AccountSnapshotWarmupService : IAccountSnapshotWarmupService
         };
 
         cancellationToken.ThrowIfCancellationRequested();
-        await _dashboardService.GetDashboardSummaryDataAsync(account.Fund, _userId);
+        var selection = string.IsNullOrWhiteSpace(account.InternName) ? account.Fund : account.InternName;
+        await _dashboardService.GetDashboardSummaryDataAsync(selection, _userId);
 
         cancellationToken.ThrowIfCancellationRequested();
-        await _donationService.GetDonationDataAsync(account.Fund, "All", range, _userId, _isAdminOrViewer);
+        await _donationService.GetDonationDataAsync(selection, "All", range, _userId, _isAdminOrViewer);
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(account.InternName) && !Cya2.Core.Utilities.InternAccountUtility.IsInternFund(account.Fund))
         {
@@ -534,14 +535,14 @@ public sealed class AccountSnapshotWarmupService : IAccountSnapshotWarmupService
         {
             AccountId = account.AccountId,
             Fund = account.Fund ?? string.Empty,
-            InternName = Cya2.Core.Utilities.InternAccountUtility.TryGetInternDesignationName(account.Fund, out var internName) ? internName : string.Empty,
+            InternName = account.AccountKind == "Intern" ? account.InternSourceId ?? string.Empty : string.Empty,
+            DisplayName = account.DisplayName ?? account.Fund,
             AccountingClass = account.AccountingClass ?? string.Empty,
             AccountNumber = account.AccountNumber ?? string.Empty,
             CreatedAt = account.CreatedAt,
             Overhead = account.Overhead,
             SoftCredit = account.SoftCredit ?? string.Empty,
-            BalanceAdjustment = account.BalanceAdjustment,
-            OtherFunds = account.OtherFunds
+            BalanceAdjustment = account.BalanceAdjustment
         };
 
     private static DateRange GetSnapshotQueryRange()

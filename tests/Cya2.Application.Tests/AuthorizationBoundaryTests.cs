@@ -17,7 +17,7 @@ public sealed class AuthorizationBoundaryTests
     public async Task ImportFromPreview_RejectsDifferentOwnerWithoutCallingProcessor()
     {
         var previews = CreatePreviewStore();
-        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations")));
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
         var processor = new RecordingImportProcessor("donations");
         var service = CreateImportService(previews, processor, new ImportActor("owner-2", true));
 
@@ -32,7 +32,7 @@ public sealed class AuthorizationBoundaryTests
     public async Task ImportFromPreview_AllowsOwnerAndRecordsOwnerOnProgress()
     {
         var previews = CreatePreviewStore();
-        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations")));
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
         var processor = new RecordingImportProcessor("donations");
         var progress = new RecordingProgressService();
         var service = CreateImportService(previews, processor, new ImportActor("owner-1", true), progress);
@@ -49,7 +49,7 @@ public sealed class AuthorizationBoundaryTests
     public async Task CommittedImportDoesNotDuplicateTransactionalSuccessAudit()
     {
         var previews = CreatePreviewStore();
-        Assert.True(previews.TrySet("preview-1", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations")));
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
         var processor = new RecordingImportProcessor("donations") { Committed = true };
         var audit = new TerminalFailureAudit();
         var service = CreateImportService(previews, processor, new ImportActor("1", true), audit: audit);
@@ -65,7 +65,7 @@ public sealed class AuthorizationBoundaryTests
     public async Task ImportDoesNotRunWhenRequiredStartAuditFails()
     {
         var previews = CreatePreviewStore();
-        Assert.True(previews.TrySet("preview-1", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations")));
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
         var processor = new RecordingImportProcessor("donations");
         var audit = new TerminalFailureAudit { RejectStart = true };
         var service = CreateImportService(previews, processor, new ImportActor("1", true), audit: audit);
@@ -73,6 +73,31 @@ public sealed class AuthorizationBoundaryTests
         await Assert.ThrowsAsync<AuditPersistenceException>(() => service.ImportFromPreviewAsync("preview-1", "donations"));
 
         Assert.Equal(0, processor.CallCount);
+    }
+
+    [Fact]
+    public async Task OldDonationBoundaryRequiresAcknowledgmentWithoutConsumingPreview()
+    {
+        var previews = CreatePreviewStore();
+        Assert.True(previews.TrySet("old", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations")
+        { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-381) }));
+        var processor = new RecordingImportProcessor("donations");
+        var service = CreateImportService(previews, processor, new ImportActor("1", true));
+        await Assert.ThrowsAsync<ImportUploadValidationException>(() => service.ImportFromPreviewAsync("old", "donations"));
+        Assert.Equal(0, processor.CallCount);
+        await service.ImportFromPreviewAsync("old", "donations", true);
+        Assert.Equal(1, processor.CallCount);
+    }
+
+    [Fact]
+    public async Task QueuedOldDonationBoundaryRequiresAcknowledgmentWithoutConsumingPreview()
+    {
+        var previews = CreatePreviewStore();
+        Assert.True(previews.TrySet("old", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations")
+        { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-381) }));
+        var service = CreateImportService(previews, new RecordingImportProcessor("donations"), new ImportActor("1", true));
+        await Assert.ThrowsAsync<ImportUploadValidationException>(() => service.StartImportFromPreviewAsync("old", "donations"));
+        Assert.True(previews.TryRemoveOwned("old", "1", "donations", out _));
     }
 
     [Fact]
@@ -168,6 +193,51 @@ public sealed class AuthorizationBoundaryTests
 
         Assert.False(result.FundsAuthorized);
         Assert.Equal(0, donorService.ReadCount);
+    }
+
+    [Fact]
+    public async Task PreviewReturnsInformationalUnresolvedCountsAndRetainsPayload()
+    {
+        var previews = new ImportPreviewStore(Options.Create(new ImportUploadOptions()));
+        var mappings = new MappingReader();
+        var service = new ImportOrchestrationService([new RecordingImportProcessor("donations")],
+            new RecordingProgressService(), new RecordingWorkQueue(), previews,
+            new ImportUploadValidator(Options.Create(new ImportUploadOptions())),
+            new FakeImportAuthorizationContext(new ImportActor("1", true)), new NoOpAuditEventService(),
+            NullLogger<ImportOrchestrationService>.Instance, new WorkbookReader(), accountMappingReader: mappings);
+        OfficeOpenXml.ExcelPackage.License.SetNonCommercialOrganization("Servant Partners");
+        using var package = new OfficeOpenXml.ExcelPackage();
+        package.Workbook.Worksheets.Add("Data").Cells[1, 1].Value = "Synthetic";
+        using var stream = new MemoryStream(package.GetAsByteArray());
+        var preview = await service.PreviewAsync(stream, "donations", "test.xlsx", "");
+        Assert.Equal(2, preview.UnresolvedNormalDonationCount);
+        Assert.Equal(1, preview.UnresolvedInternDonationCount);
+        Assert.Equal(1, preview.CanonicalDonationCount);
+        Assert.True(previews.TryRemoveOwned(preview.PreviewId, "1", "donations", out _));
+        Assert.Equal(1, mappings.Calls);
+    }
+
+    private sealed class MappingReader : IDonationAccountMappingReader
+    {
+        public int Calls;
+        public Task<DonationAccountMappingCounts> GetCountsAsync(IReadOnlyList<Cya2.Core.Imports.NormalizedDonation> donations, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new DonationAccountMappingCounts(2, 1));
+        }
+    }
+
+    private sealed class WorkbookReader : IDonationWorkbookReader
+    {
+        public Cya2.Core.Imports.DonationUploadValidationResult Read(Stream workbook, CancellationToken cancellationToken = default) => new()
+        {
+            Errors = [], SourceRowCount = 1,
+            Donations = [new Cya2.Core.Imports.NormalizedDonation
+            {
+                SourceRows = [2], Date = DateTime.Today, Amount = 1, Fund = "Unknown", AccountName = "",
+                DonorDisplayName = "Synthetic", PaymentMethod = "", GiftType = ""
+            }]
+        };
     }
 
     private static ImportOrchestrationService CreateImportService(

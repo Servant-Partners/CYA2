@@ -1,119 +1,35 @@
 # Intern Account Behavior
 
-Intern accounts intentionally differ from normal fundraising accounts. This document records those differences and the code that implements them.
+## Administration
 
-The rules below are the intended contract. The [production review](../../../docs/PRODUCTION_REVIEW.md) A07 identifies central warmup/cache paths requiring correction/verification; this document is not evidence that every intern path already complies.
+Admin account management offers Primary, Sub, and Intern modes. Intern creation and editing require only a display name and the source `Tribute System Record ID`. No email, login user, accounting class, account number, or overhead entry is required. `AccountKind = 'Intern'`, `InternSourceId`, and `DisplayName` are explicit account metadata. The internal Fund label is not an intern identity or display name.
 
-## Identity and Storage
+Intern mutations revalidate the current administrator inside the database transaction and persist required audit records. Duplicate source IDs are rejected; duplicate display names are allowed. Source IDs are opaque and case-sensitive, preserving leading zeros. Existing initialized databases are not automatically altered; schema changes belong only to `database/schema/001_InitialSchema.sql` during pre-production.
 
-- An intern account is recognized by the `Intern: ` stored label prefix. `AccountId` is authoritative for account relationships; the label is not a donation lookup key. Donation/donor lookup identity is `InternName`.
-- The designation after that prefix is the intern identity used to retrieve donation and donor data.
-- Intern accounts have `AccountingClass = NULL` and an `INT-<user id>` account number because they are not accounting-backed accounts.
+Deleting an account removes its configuration and account-access links and clears references to it as a default account. It never deletes or changes donations, expenses, accounting transactions, or source evidence. Only upload/rollback processes may change monetary transaction data. Recreating an account with the same source ID exposes the retained matching donations without rewriting those transactions.
 
-Implementation:
+## Users and Access
 
-- `src/Cya2.Core/Utilities/InternAccountUtility.cs`
-- `src/Cya2.Infrastructure/Repositories/UserAdministrationStore.cs` (`EnsureInternAsync`)
-- `database/schema/001_InitialSchema.sql`
+Intern is no longer a login role offered by user administration. Supported role choices are User, Viewer, and Admin. No migration of legacy Intern users is included; this implementation assumes none exist.
 
-## Donation and Donor Data
+Manage Users grants and revokes viewing access through the existing `AccountsUsers` relationships. Multiple users may access one intern account, and a user may access multiple intern and primary accounts. Current authorization is revalidated before financial data access. Names and source IDs are excluded from general diagnostic logs and audit payloads.
 
-- Normal accounts load donation and donor data by fund, including merged subaccounts where appropriate.
-- An intern account loads by `DonationData.InternName`, never by its fund. A single source fund can contain data belonging to multiple interns, so using the fund would return the wrong rows.
-- Donor selection and account-authorized export use the same intern-name lookup for all dates and date ranges; their summary cache scope retains that intern identity.
-- Donor identity is shared across funds using direct Constituent IDs, eligible third-party soft-credit recipient IDs, or unambiguous normalized-name matches when an applicable ID is blank. This never broadens intern donation reads: only gifts matching the selected InternName contribute to totals. Contacts come only from direct gifts linked to the shared donor, not intermediary contacts.
-- Single and bulk reads require an exact stored `InternName`, including case, accents, punctuation, order, and whitespace; they do not infer alternate names. Imports must use the account designation exactly or those gifts will not appear for that account.
+## Data Lookup and Presentation
 
-Implementation:
+Donation and donor reads use exact `DonationData.InternSourceId` matches, never the shared donation Fund or the intern display name. Creating the matching account makes previously imported donations available through source-ID lookup. Unknown IDs remain accepted during import and do not create accounts.
 
-- `src/Cya2.Application/Services/AccountFactDataService.cs`
-- `src/Cya2.Application/Services/DonationService.cs`
-- `src/Cya2.Application/Services/DonorService.cs`
-- `src/Cya2.Infrastructure/Repositories/DonationReadRepository.cs`
-- `src/Cya2.Infrastructure/Services/DonationImportProcessor.cs`
+`DonationAccountAssociations` derives the current AccountId from configuration. Nonblank intern IDs are exclusively associated with the exactly matching intern account; an unknown ID never falls back to a normal Fund. Account deletion removes the association immediately without changing the donation. Recreating the exact ID associates retained source rows with the new AccountId. These are configuration-derived views, not stored monetary foreign keys, so rollback restores source evidence and association follows current account configuration.
 
-## Accounting and Expenses
+Some existing DTO/interface members retain the legacy name `InternName`; in account-selection and donation-read contracts these now carry the source ID. Human labels remain separate and display as `<intern name> (Intern)`. Source IDs must not be used as display labels. Source `DonationData.InternName` remains descriptive import data, not a lookup key.
 
-- Intern accounts have donation data only.
-- They intentionally return no `AccountingData`, expense transactions, accounting cache entries, or accounting snapshots.
-- Home and other views use intern mode to avoid showing fund-only accounting features for an intern account.
+Home preserves its donation-only presentation when the selected account is an intern account, regardless of the authenticated user's role. Donations and Donors use that same selected-account scope. Users retain normal account selectors and navigation; no special intern login navigation is created. Settings permits an authorized intern account to be selected as the default account.
 
-Implementation:
+Intern accounts have no accounting or expense data. Expenses remains reachable and displays a no-accounting-data notice for an intern selection, including navigation to Expenses with an intern already selected. The service returns empty accounting results without querying accounting for that intern.
 
-- `src/Cya2.Application/Services/AccountFactDataService.cs`
-- `src/Cya2.Application/Services/AccountCalculationService.cs`
-- `src/Cya2.Application/Services/AccountSnapshotWarmupService.cs`
-- `src/Cya2.Application/Services/AdminRecentAccountSnapshotService.cs`
-- `src/Cya2.Web/Components/Pages/Home.razor`
+## Caches
 
-## User Lifecycle and Access
+Account metadata and authorization caches are invalidated on intern CRUD; account access changes invalidate authorization. Contexts and cached fund references carry the source ID separately from the display name. Home summary keys include AccountId, the exact intern source identity, relevant generations, and calendar period. Central and fallback overview/warmup paths load intern donations by source ID and skip accounting; intern balances are zero.
 
-- Creating an Intern user automatically creates or links an intern account and makes it the user’s default account.
-- Deleting an Intern user revokes access but retains the account and historical donation/donor data.
-- Renaming an Intern user is intended to correct typos, not to represent an actual name change. It retains the linked account and donation rows while changing the exact lookup designation; imported `InternName` values must match the corrected designation.
-- Creating or renaming to a designation with an existing intern account requires explicit Admin confirmation before reuse. This prevents a user from silently inheriting another intern account’s history.
-- An existing Intern user's role cannot be changed. A different role requires a new user account; the Admin role selector is disabled for an existing Intern. Other permitted profile and access changes remain available.
-- User, intern account, and access-link changes are committed together; the Admin staff editor submits profile and selected access changes as one transaction. If an outcome cannot be confirmed, refresh and verify it before retrying.
+## Validation
 
-Implementation:
-
-- `src/Cya2.Application/DTOs/AdminUserDtos.cs`
-- `src/Cya2.Application/Services/UserManagementService.cs`
-- `src/Cya2.Infrastructure/Repositories/UserAdministrationStore.cs`
-- `src/Cya2.Web/Components/Pages/Admin.razor`
-
-## Authorization and Account Context
-
-- Intern authorization checks the currently linked intern account, and the account designation supplies `InternName` as the lookup identity.
-- Normal accounts use Fund or AccountId for their normal authorization and selection paths.
-- Account context and fund-reference DTOs derive and carry `InternName` separately from the stored fund so presentation cannot accidentally change data lookup behavior.
-- Home authorizes every account selection against the current account context before loading dashboard data. Intern Home selection continues to resolve with `InternName`; it does not use a previously selected normal-account value.
-- When an account selection is no longer authorized, Home reports access denied. The no-account message is reserved for a current account context with no associated accounts.
-
-Implementation:
-
-- `src/Cya2.Application/Services/UserAuthorizationService.cs`
-- `src/Cya2.Application/Services/HomeAuthorizationService.cs`
-- `src/Cya2.Application/Services/UserAccountContextService.cs`
-- `src/Cya2.Application/Services/FundReferenceService.cs`
-- `src/Cya2.Application/Services/AccountSelectionCoordinator.cs`
-
-## Dropdown Display and Sorting
-
-- All account dropdowns display intern accounts as `LastName, FirstName (Intern)`.
-- The Accounts Overview grid and its copied table use the same intern-aware display label; the underlying fund and intern donation lookup identity remain unchanged.
-- The stored `Intern: <designation>` value is not changed for display.
-- Dropdown sorting uses the display sort key, placing intern accounts by surname with other named accounts rather than under `Intern`.
-- Selection values preserve the account ID, Fund, or `InternName` required by the individual data flow; display labels must not be used as data lookup keys.
-- User Settings uses `SelectionKey`, not `AccountingClass`, because intern accounting classes are intentionally null.
-- Selector presentation uses the refreshed database-backed account context rather than sign-in-time role claims. Intern users see their single account as read-only text; Admin and Viewer users receive searchable selectors; regular users receive non-searchable selectors. This updates with refreshed account data after a role change.
-
-Implementation:
-
-- `src/Cya2.Core/Utilities/InternAccountUtility.cs`
-- `src/Cya2.Web/Components/Pages/Admin.razor`
-- `src/Cya2.Web/Components/Shared/AccountsOverviewView.razor`
-- `src/Cya2.Web/Components/Pages/Home.razor`
-- `src/Cya2.Web/Components/Pages/Donations.razor`
-- `src/Cya2.Web/Components/Pages/Donors.razor`
-- `src/Cya2.Web/Components/Pages/Expenses.razor`
-- `src/Cya2.Web/Components/Pages/UserSettings.razor`
-- `src/Cya2.Application/Services/FinancialDashboardService.cs`
-- `src/Cya2.Application/Services/ExpenseService.cs`
-
-## Caching and Summary Warming
-
-- Intern Home summary warmups and live reads share a key containing `AccountId`, exact intern identity, donation/metadata generation and calendar period; the warm builder uses the account's overhead.
-- Central rebuild and the overview fallback exclude intern accounts from normal fund and accounting loads. Intern summary, overview donation totals, and missing-gift warmups use exact `InternName` rows; overview intern balances are zero and do not create accounting balance entries.
-- Accounting cache warming is skipped for intern accounts because no accounting data exists for them.
-- Authorization/context caches are invalidated after user and account-access lifecycle changes.
-- Creating or updating an Intern also invalidates account metadata and schedules the central rebuild for the current intern designation.
-
-Implementation:
-
-- `src/Cya2.Application/Services/AuthoritativeDataCacheLoaders.cs`
-- `src/Cya2.Application/Services/CacheRebuildService.cs`
-- `src/Cya2.Application/Services/FinancialDashboardService.cs`
-- `src/Cya2.Application/Services/AccountSnapshotWarmupService.cs`
-- `src/Cya2.Application/Services/UserAccountContextService.cs`
-- `src/Cya2.Application/Services/UserManagementService.cs`
+Application/build and non-Docker regression checks are run during implementation. Docker lifecycle and rollback simulations are left to the user. `LiveDonationImportTests.InternAccountLifecycleRetainsTransactionsAndUsesSourceId` covers creation without a login/accounting identity, exact-ID lookup, access links, authorization rejection, transaction retention after deletion, and reassociation after recreation when explicitly run against the disposable MySQL fixture.

@@ -6,25 +6,24 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using OfficeOpenXml;
 using Cya2.Application.Interfaces;
 using Cya2.Application.Diagnostics;
 using Cya2.Core.DTOs;
 using Cya2.Core.Interfaces;
 using Cya2.Core.Services;
+using Cya2.Core.Imports;
+using System.Text.Json;
 using ImportResult = Cya2.Application.Interfaces.ImportResult;
 
 namespace Cya2.Infrastructure.Services
 {
     internal sealed class DonationImportProcessor : IDonationImportMaintenanceService, IImportProcessor
     {
-        private readonly IConfiguration _config;
         private readonly ILogger<DonationImportProcessor> _logger;
         private readonly IImportProgressService _progressService;
         private readonly IDonationRepository _donationRepository;
         private readonly IImportCacheInvalidator _cacheInvalidator;
-        private readonly DonorFrequencyService _frequencyService;
-        private readonly DonorIdentityResolver _identityResolver;
+        private readonly IDonationWorkbookReader _workbookReader;
 
         public string ImportType => "donations";
 
@@ -35,20 +34,22 @@ namespace Cya2.Infrastructure.Services
             IDonationRepository donationRepository,
             IImportCacheInvalidator cacheInvalidator,
             DonorFrequencyService frequencyService,
-            DonorIdentityResolver identityResolver)
+            DonorIdentityResolver identityResolver,
+            IDonationWorkbookReader? workbookReader = null)
         {
-            _config = config;
             _logger = logger;
             _progressService = progressService;
             _donationRepository = donationRepository;
             _cacheInvalidator = cacheInvalidator;
-            _frequencyService = frequencyService;
-            _identityResolver = identityResolver;
+            _workbookReader = workbookReader ?? new DonationWorkbookReader();
         }
 
         public async Task<ImportResult> ProcessAsync(Stream file, string progressId, CancellationToken cancellationToken)
         {
+            _progressService.CompleteStep(progressId, "ImportQueued", "Completed");
+            _progressService.AddStep(progressId, "ImportWriteGate", "ImportWriteGate");
             using var lease = await FinancialWriteCoordinator.EnterAsync(cancellationToken);
+            _progressService.CompleteStep(progressId, "ImportWriteGate", "Completed");
             try { return await ProcessAsync(file, cancellationToken, progressId); }
             catch (ImportOutcomeUnknownException)
             {
@@ -68,438 +69,91 @@ namespace Cya2.Infrastructure.Services
 
         private async Task<ImportResult> ProcessAsync(Stream file, CancellationToken ct, string progressId)
         {
-            var result = new ImportResult { ProgressId = progressId };
-            using var package = new ExcelPackage(file);
-            var ws = package.Workbook.Worksheets[0];
-            if (ws == null)
+            _progressService.AddStep(progressId, "File Validation", "Validating donation rows and source IDs...");
+            var validation = _workbookReader.Read(file, ct);
+            var result = new ImportResult
             {
-                result.Errors.Add("No worksheet found");
-                _progressService.AddErrors(progressId, result.Errors);
-                _progressService.SetStatus(progressId, "No worksheet found");
-                return result;
-            }
-
-            _progressService.AddStep(progressId, "File Validation", "Validating Excel file structure...");
-            const int headerRow = 1;
-            const int firstDataRow = 2;
-            var map = BuildColumnMap(ws, headerRow);
-            string[] required =
-            {
-                "Gift Date", "Name", "Gift Payment Type", "Gift Type", "Fund Split Amount", "Fund Notes",
-                "Soft Credit Recipient Name", "Preferred Address Line 1", "Preferred City", "Preferred State",
-                "Preferred ZIP", "Preferred Country", "Personal Email Number", "Home Phone Number",
-                "Personal Mobile Phone Number", "Gift Is Anonymous", "Gift Import ID",
-                "Primary Addressee", "Constituent ID", "Soft Credit Recipient ID"
+                ProgressId = progressId,
+                TotalRows = validation.SourceRowCount,
+                DuplicateRowsMerged = validation.DuplicateRowsMerged
             };
-            foreach (var column in required)
+            if (!validation.IsValid)
             {
-                if (!map.ContainsKey(column))
-                {
-                    result.Errors.Add($"Missing column: {column}");
-                }
-            }
-
-            var honorMemorialColumn = GetFirstAvailableColumn(
-                map,
-                "Honor/Memorial Sort Name",
-                "Honor/Memorial Name");
-            if (honorMemorialColumn is null)
-            {
-                result.Errors.Add("Missing column: Honor/Memorial Sort Name or Honor/Memorial Name");
-            }
-
-            if (result.Errors.Count > 0)
-            {
-                _progressService.CompleteStep(progressId, "File Validation", "Failed - Missing required columns");
+                result.Errors.AddRange(validation.Errors.Select(error => error.Message));
+                result.FailedRows = validation.Errors.Where(error => error.RowNumber > 1).Select(error => error.RowNumber).Distinct().Count();
                 _progressService.AddErrors(progressId, result.Errors);
-                _progressService.Complete(progressId);
+                _progressService.CompleteStep(progressId, "File Validation", "Failed - Existing data was not changed");
                 return result;
             }
 
-            var honorMemorialColumnName = honorMemorialColumn.GetValueOrDefault();
-
-            var totalDataRows = Math.Max(0, (ws.Dimension?.End.Row ?? 0) - firstDataRow + 1);
-            _progressService.CompleteStep(progressId, "File Validation", "Completed", $"Found {totalDataRows:N0} rows to import");
-
-            _progressService.AddStep(progressId, "Data Analysis", "Parsing, resolving donor identity, and consolidating duplicates...");
-            var allRows = new List<DonationImportRowDto>(totalDataRows);
-            var earliest = (DateTime?)null;
-            var lastRow = ws.Dimension?.End.Row ?? 0;
-
-            for (var rowNumber = firstDataRow; rowNumber <= lastRow; rowNumber++)
-            {
-                ct.ThrowIfCancellationRequested();
-                var dateText = GetCellText(ws, rowNumber, map["Gift Date"]);
-                var accountName = GetCellText(ws, rowNumber, map["Name"]);
-                var amountText = GetCellText(ws, rowNumber, map["Fund Split Amount"]);
-                var fund = GetCellText(ws, rowNumber, map["Fund Notes"]);
-                if (Enumerable.Range(1, ws.Dimension?.End.Column ?? 0).All(column => string.IsNullOrWhiteSpace(ws.Cells[rowNumber, column].Text)))
-                {
-                    continue;
-                }
-
-                if (!ExcelParsingHelpers.TryParseDateUS(dateText, out var date))
-                {
-                    result.FailedRows++;
-                    result.Errors.Add(ImportDiagnosticMessages.InvalidCell(rowNumber, "Gift Date"));
-                    continue;
-                }
-
-                if (!ExcelParsingHelpers.TryParseDoubleUS(amountText, out var amount))
-                {
-                    result.FailedRows++;
-                    result.Errors.Add(ImportDiagnosticMessages.InvalidCell(rowNumber, "Amount"));
-                    continue;
-                }
-
-                if (!double.IsFinite(amount) || Math.Abs(amount) >= 10000000000000000d || string.IsNullOrWhiteSpace(fund))
-                {
-                    result.FailedRows++;
-                    result.Errors.Add(ImportDiagnosticMessages.InvalidCell(rowNumber, "Amount or Fund"));
-                    continue;
-                }
-
-                var isAnonymous = ExcelParsingHelpers.ParseYesNo(GetCellText(ws, rowNumber, map["Gift Is Anonymous"]));
-                var addressee = GetCellText(ws, rowNumber, map["Primary Addressee"]);
-                var softCredit = GetCellText(ws, rowNumber, map["Soft Credit Recipient Name"]);
-                var sourceName = GetCellText(ws, rowNumber, map["Name"]);
-                var identity = _identityResolver.Resolve(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous));
-                var isSoftCredit = string.Equals(identity.ResolutionSource, "SoftCredit", StringComparison.Ordinal);
-                var isThirdParty = _identityResolver.IsThirdPartySoftCredit(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous));
-                var constituentId = GetCellText(ws, rowNumber, map["Constituent ID"]);
-                var softCreditRecipientId = GetCellText(ws, rowNumber, map["Soft Credit Recipient ID"]);
-                if (constituentId?.Length > 255)
-                {
-                    result.FailedRows++;
-                    result.Errors.Add(ImportDiagnosticMessages.InvalidCell(rowNumber, "Constituent ID"));
-                    continue;
-                }
-                if (softCreditRecipientId?.Length > 255)
-                {
-                    result.FailedRows++;
-                    result.Errors.Add(ImportDiagnosticMessages.InvalidCell(rowNumber, "Soft Credit Recipient ID"));
-                    continue;
-                }
-
-                var parsedRow = new DonationImportRowDto
-                {
-                    SourceRowNumber = rowNumber,
-                    Date = date,
-                    AccountName = sourceName ?? string.Empty,
-                    PaymentMethod = GetCellText(ws, rowNumber, map["Gift Payment Type"]) ?? string.Empty,
-                    GiftType = GetCellText(ws, rowNumber, map["Gift Type"]) ?? string.Empty,
-                    Amount = amount,
-                    Fund = fund ?? string.Empty,
-                    GiftImportId = GetCellText(ws, rowNumber, map["Gift Import ID"]),
-                    ConstituentId = constituentId,
-                    SoftCreditRecipientId = isAnonymous ? null : softCreditRecipientId,
-                    IsThirdPartySoftCredit = isThirdParty,
-                    IsSoftCredit = isSoftCredit,
-                    InternName = GetCellText(ws, rowNumber, honorMemorialColumnName),
-                    PrimaryAddressee = isAnonymous ? null : addressee,
-                    SoftCreditName = isAnonymous ? null : softCredit,
-                    Address = isAnonymous || _identityResolver.IsThirdPartySoftCredit(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous)) ? null : GetCellText(ws, rowNumber, map["Preferred Address Line 1"]),
-                    City = isAnonymous || _identityResolver.IsThirdPartySoftCredit(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous)) ? null : GetCellText(ws, rowNumber, map["Preferred City"]),
-                    State = isAnonymous || _identityResolver.IsThirdPartySoftCredit(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous)) ? null : GetCellText(ws, rowNumber, map["Preferred State"]),
-                    PostalCode = isAnonymous || _identityResolver.IsThirdPartySoftCredit(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous)) ? null : GetCellText(ws, rowNumber, map["Preferred ZIP"]),
-                    Country = isAnonymous || _identityResolver.IsThirdPartySoftCredit(new DonorIdentityInput(fund ?? string.Empty, sourceName, softCredit, addressee, isAnonymous)) ? null : GetCellText(ws, rowNumber, map["Preferred Country"]),
-                    Email = isAnonymous || isSoftCredit ? null : GetCellText(ws, rowNumber, map["Personal Email Number"]),
-                    PhoneFixed = isAnonymous || isSoftCredit ? null : GetCellText(ws, rowNumber, map["Home Phone Number"]),
-                    PhoneMobile = isAnonymous || isSoftCredit ? null : GetCellText(ws, rowNumber, map["Personal Mobile Phone Number"]),
-                    IsAnonymous = isAnonymous,
-                    ResolvedDonorName = identity.DisplayName,
-                    DonorIdentityKey = identity.IdentityKey,
-                    DonorResolutionSource = identity.ResolutionSource,
-                    DonorResolutionVersion = identity.ResolutionVersion
-                };
-                if (isSoftCredit)
-                {
-                    parsedRow.Address = parsedRow.City = parsedRow.State = parsedRow.PostalCode = parsedRow.Country = null;
-                }
-                AddObservedContacts(parsedRow);
-                allRows.Add(parsedRow);
-
-                earliest = !earliest.HasValue || date < earliest.Value ? date : earliest;
-                result.TotalRows++;
-            }
-
-            var identityResolver = new ConstituentIdentityResolver(allRows.Select(row => new ConstituentIdentityEvidence(
-                row.ResolvedDonorName ?? row.AccountName, row.ConstituentId, row.IsSoftCredit, row.IsAnonymous,
-                row.IsThirdPartySoftCredit ? row.SoftCreditRecipientId : null)));
-            foreach (var row in allRows)
-            {
-                row.DonorIdentityKey = identityResolver.Resolve(new ConstituentIdentityEvidence(
-                    row.ResolvedDonorName ?? row.AccountName, row.ConstituentId, row.IsSoftCredit, row.IsAnonymous,
-                    row.IsThirdPartySoftCredit ? row.SoftCreditRecipientId : null)).Key;
-            }
-            var canonicalRows = ConsolidateDuplicates(allRows, result);
-            if (result.Errors.Count > 0 || canonicalRows.Count == 0)
-            {
-                if (result.Errors.Count == 0) result.Errors.Add("No donation rows found. Existing data was not changed.");
-                _progressService.AddErrors(progressId, result.Errors);
-                _progressService.SetStatus(progressId, "Rejected - existing data was not changed");
-                _progressService.Complete(progressId);
-                return result;
-            }
-            _progressService.CompleteStep(progressId, "Data Analysis", "Completed", $"{canonicalRows.Count:N0} canonical rows; {result.DuplicateRowsMerged:N0} duplicates merged");
-
-            _progressService.AddStep(progressId, "Frequency Pre-load", "Fetching prior donor history for frequency classification...");
-            var donorKeys = canonicalRows
-                .Where(row => !string.IsNullOrWhiteSpace(row.ResolvedDonorName) && !string.IsNullOrWhiteSpace(row.Fund))
-                .Select(row => (IdentityKey: row.DonorIdentityKey!, row.Fund))
-                .Distinct()
-                .ToList();
-            var priorHistory = earliest.HasValue
-                ? await _donationRepository.GetRecentDonationsForDonorsAsync(donorKeys, earliest.Value, 30, ct)
-                : new List<Cya2.Core.ReadModels.DonationRecord>();
-            _progressService.CompleteStep(progressId, "Frequency Pre-load", "Completed", $"Loaded prior history for {priorHistory.Select(h => h.AccountName).Distinct().Count():N0} donor records");
-
-            _logger.LogInformation("Donation import frequency classification starting. ProgressId={ProgressId}, CanonicalRows={CanonicalRows}, PriorHistory={PriorHistory}", progressId, canonicalRows.Count, priorHistory.Count);
-            ClassifyFrequencies(canonicalRows, priorHistory);
-            _logger.LogInformation("Donation import frequency classification completed. ProgressId={ProgressId}, CanonicalRows={CanonicalRows}", progressId, canonicalRows.Count);
-
-            _progressService.AddStep(progressId, "Data Import", "Importing canonical donation records and contact values...");
-            _progressService.SetExpected(progressId, canonicalRows.Count);
-            _progressService.Report(progressId, 0, 0, result.FailedRows, "Starting import...");
-
-            var persistenceRows = canonicalRows.Select(ToPersistenceModel).ToList();
-            _logger.LogInformation("Donation import persistence preparation completed. ProgressId={ProgressId}, PersistenceRows={PersistenceRows}", progressId, persistenceRows.Count);
-            ct.ThrowIfCancellationRequested();
-                _logger.LogInformation("Donation import set-based persistence starting. ProgressId={ProgressId}, RowCount={RowCount}", progressId, persistenceRows.Count);
-                var persistenceResult = await _donationRepository.ReplaceCanonicalDonationsAsync(persistenceRows, ct);
-                result.InsertedRows = persistenceResult.Inserted;
-                ImportCompletion.Notify(result, progressId, CacheDataDomains.Donations | CacheDataDomains.DonorContacts, _cacheInvalidator, _progressService, _logger);
-                _logger.LogInformation("Donation import set-based persistence completed. ProgressId={ProgressId}, RowCount={RowCount}, Inserted={Inserted}, ContactsAdded={ContactsAdded}", progressId, persistenceRows.Count, persistenceResult.Inserted, persistenceResult.ContactsAdded);
-            _logger.LogInformation("Donation import complete. Total={Total}, Canonical={Canonical}, Inserted={Inserted}, DuplicatesMerged={DuplicatesMerged}, Failed={Failed}", result.TotalRows, canonicalRows.Count, result.InsertedRows, result.DuplicateRowsMerged, result.FailedRows);
-            return result;
-        }
-
-        private static List<DonationImportRowDto> ConsolidateDuplicates(List<DonationImportRowDto> rows, ImportResult result)
-        {
-            var canonical = new List<DonationImportRowDto>();
-            var grouped = new Dictionary<DonationDuplicateKey, DonationImportRowDto>();
-            var duplicateRows = new Dictionary<DonationImportRowDto, List<int>>();
-
-            foreach (var row in rows)
-            {
-                var candidate = new DonationDuplicateCandidate(row.GiftImportId, row.Fund, row.Date, Convert.ToDecimal(row.Amount), row.PaymentMethod, row.GiftType, row.DonorIdentityKey ?? string.Empty);
-                if (!DonationDuplicateClassifier.TryCreateKey(candidate, out var key))
-                {
-                    canonical.Add(row);
-                    continue;
-                }
-
-                if (!grouped.TryGetValue(key, out var existing))
-                {
-                    grouped[key] = row;
-                    canonical.Add(row);
-                    continue;
-                }
-
-                if (existing.IsSoftCredit != row.IsSoftCredit ||
-                    !string.Equals(existing.ConstituentId, row.ConstituentId, StringComparison.Ordinal) ||
-                    !string.Equals(existing.SoftCreditRecipientId, row.SoftCreditRecipientId, StringComparison.Ordinal))
-                {
-                    canonical.Add(row);
-                    continue;
-                }
-
-                MergeContactValues(existing, row);
-                result.DuplicateRowsMerged++;
-                if (!duplicateRows.TryGetValue(existing, out var sourceRows))
-                {
-                    sourceRows = new List<int>();
-                    duplicateRows[existing] = sourceRows;
-                }
-                sourceRows.Add(row.SourceRowNumber);
-            }
-
-            foreach (var pair in duplicateRows)
-            {
+            _progressService.CompleteStep(progressId, "File Validation", "Completed");
+            foreach (var row in validation.Donations.Where(row => row.SourceRows.Length > 1))
                 result.DuplicateReport.Add(new DonationImportReportEntry
                 {
-                    CanonicalRowNumber = pair.Key.SourceRowNumber,
-                    DuplicateRowNumbers = pair.Value,
-                    GiftImportId = pair.Key.GiftImportId ?? string.Empty,
-                    Fund = pair.Key.Fund,
-                    Amount = Convert.ToDecimal(pair.Key.Amount),
-                    DonorName = pair.Key.ResolvedDonorName ?? pair.Key.AccountName,
-                    Reason = "Rows matched on gift, fund allocation, date, amount, payment type, gift type, and resolved donor identity; contact values were merged."
+                    CanonicalRowNumber = row.SourceRows[0],
+                    DuplicateRowNumbers = row.SourceRows.Skip(1).ToArray(),
+                    GiftImportId = row.GiftImportId ?? string.Empty,
+                    Fund = row.Fund,
+                    Amount = row.Amount,
+                    DonorName = row.DonorDisplayName,
+                    Reason = "Matching gift allocation and source identities; contact observations consolidated."
                 });
-            }
 
-            return canonical;
-        }
-
-        private static void MergeContactValues(DonationImportRowDto target, DonationImportRowDto source)
-        {
-            AddObservedContacts(source, target);
-            target.Email = MergeValue(target.Email, source.Email);
-            target.PhoneFixed = MergeValue(target.PhoneFixed, source.PhoneFixed);
-            target.PhoneMobile = MergeValue(target.PhoneMobile, source.PhoneMobile);
-            target.Address = MergeValue(target.Address, source.Address);
-            target.City = MergeValue(target.City, source.City);
-            target.State = MergeValue(target.State, source.State);
-            target.PostalCode = MergeValue(target.PostalCode, source.PostalCode);
-            target.Country = MergeValue(target.Country, source.Country);
-        }
-
-        private static void AddObservedContacts(DonationImportRowDto row, DonationImportRowDto? target = null)
-        {
-            target ??= row;
-            AddObservedContact(target, "Email", row.Email);
-            AddObservedContact(target, "HomePhone", row.PhoneFixed);
-            AddObservedContact(target, "MobilePhone", row.PhoneMobile);
-            AddObservedContact(target, "AddressLine1", row.Address);
-            AddObservedContact(target, "City", row.City);
-            AddObservedContact(target, "State", row.State);
-            AddObservedContact(target, "PostalCode", row.PostalCode);
-            AddObservedContact(target, "Country", row.Country);
-        }
-
-        private static void AddObservedContact(DonationImportRowDto row, string contactType, string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
+            var rows = validation.Donations.Select(row => new CanonicalDonationWriteModel
             {
-                return;
-            }
-
-            if (!row.ObservedContacts.TryGetValue(contactType, out var values))
-            {
-                values = new List<string>();
-                row.ObservedContacts[contactType] = values;
-            }
-
-            if (!values.Contains(value.Trim(), StringComparer.OrdinalIgnoreCase))
-            {
-                values.Add(value.Trim());
-            }
-        }
-
-        private static string? MergeValue(string? first, string? second)
-        {
-            return string.IsNullOrWhiteSpace(first) ? second : first;
-        }
-
-        private void ClassifyFrequencies(List<DonationImportRowDto> rows, List<Cya2.Core.ReadModels.DonationRecord> priorHistory)
-        {
-            var priorByDonor = priorHistory
-                .GroupBy(history => (history.DonorIdentityKey, history.Fund.ToLowerInvariant()))
-                .ToDictionary(group => group.Key, group => group.OrderBy(item => item.Date).Select(item => new DonorGiftRecord { Date = item.Date, Amount = Convert.ToDecimal(item.Amount) }).ToList());
-
-            foreach (var group in rows.GroupBy(row => (row.DonorIdentityKey ?? string.Empty, row.Fund.ToLowerInvariant())))
-            {
-                priorByDonor.TryGetValue(group.Key, out var prior);
-                prior ??= new List<DonorGiftRecord>();
-                var fileGifts = group.OrderBy(row => row.Date).ToList();
-                var allGifts = prior.Concat(fileGifts.Select(row => new DonorGiftRecord { Date = row.Date, Amount = Convert.ToDecimal(row.Amount) })).OrderBy(gift => gift.Date).ToList();
-                foreach (var row in fileGifts)
+                Donor = new DonorWriteModel
                 {
-                    row.Frequency = _frequencyService.ClassifyGift(new DonorGiftRecord { Date = row.Date, Amount = Convert.ToDecimal(row.Amount) }, allGifts).Frequency;
-                }
-            }
-        }
-
-        private static CanonicalDonationWriteModel ToPersistenceModel(DonationImportRowDto row)
-        {
-            var donor = new DonorWriteModel
-            {
-                Fund = row.Fund,
-                DisplayName = row.ResolvedDonorName ?? row.AccountName,
-                IdentityKey = row.DonorIdentityKey ?? DonorIdentityResolver.NormalizeIdentityKey(row.AccountName),
-                ResolutionSource = row.DonorResolutionSource ?? "AccountName",
-                ResolutionVersion = row.DonorResolutionVersion
-            };
-
-            return new CanonicalDonationWriteModel
-            {
-                Donor = donor,
+                    Fund = row.Fund,
+                    DisplayName = row.DonorDisplayName,
+                    IdentityKey = row.IsAnonymous
+                        ? row.CreditedDonorSourceId is { } anonymousId ? "anonymous:id:" + anonymousId : "anonymous:unidentified:" + Guid.NewGuid().ToString("N")
+                        : "id:" + row.CreditedDonorSourceId,
+                    ConstituentId = row.IsAnonymous ? null : row.CreditedDonorSourceId,
+                    ResolutionSource = row.IsAnonymous ? "Anonymous" : "SourceId",
+                    ResolutionVersion = 2
+                },
                 Date = row.Date,
+                Amount = row.Amount,
+                Fund = row.Fund,
+                AccountName = row.AccountName,
                 GiftImportId = row.GiftImportId,
                 ConstituentId = row.ConstituentId,
                 SoftCreditRecipientId = row.SoftCreditRecipientId,
-                IsSoftCredit = row.IsSoftCredit,
-                AccountName = row.AccountName,
+                IsSoftCredit = row.IsSoftCredit || row.IsThirdPartySoftCredit,
+                IsAnonymous = row.IsAnonymous,
                 PaymentMethod = row.PaymentMethod,
                 GiftType = row.GiftType,
-                Amount = Convert.ToDecimal(row.Amount),
-                Fund = row.Fund,
-                InternName = row.InternName,
+                InternName = row.InternDisplayName,
+                InternSourceId = row.InternSourceId,
                 PrimaryAddressee = row.PrimaryAddressee,
                 SoftCreditName = row.SoftCreditName,
-                IsAnonymous = row.IsAnonymous,
-                Frequency = row.Frequency,
-                Contacts = BuildContacts(row)
-            };
-        }
+                SourceEvidenceJson = JsonSerializer.Serialize(row)
+            }).ToArray();
 
-        private static IReadOnlyList<DonorContactWriteModel> BuildContacts(DonationImportRowDto row)
-        {
-            if (row.IsAnonymous)
+            _progressService.SetExpected(progressId, rows.Length);
+            ct.ThrowIfCancellationRequested();
+            string? phase = null;
+            var persisted = await _donationRepository.ReplaceCanonicalDonationsAsync(rows, ct, update =>
             {
-                return Array.Empty<DonorContactWriteModel>();
-            }
-
-            return row.ObservedContacts
-                .SelectMany(item => item.Value.Select(value => new { Type = item.Key, Value = value }))
-                .Select(item => new DonorContactWriteModel
+                try
                 {
-                    ContactType = item.Type,
-                    ContactValue = item.Value,
-                     NormalizedValue = NormalizeContact(item.Type, item.Value)
-                })
-                .ToList();
-        }
-
-        private static string NormalizeContact(string type, string value)
-        {
-            var trimmed = value.Trim();
-            return type.EndsWith("Phone", StringComparison.OrdinalIgnoreCase)
-                ? new string(trimmed.Where(char.IsDigit).ToArray())
-                : DonorIdentityResolver.NormalizeWhitespace(trimmed).ToUpperInvariant();
-        }
-
-        private static Dictionary<string, int> BuildColumnMap(ExcelWorksheet ws, int headerRow)
-        {
-            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var lastColumn = ws.Dimension?.End.Column ?? 0;
-            for (var column = 1; column <= lastColumn; column++)
-            {
-                var header = ws.Cells[headerRow, column]?.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(header) && !map.ContainsKey(header))
-                {
-                    map[header] = column;
+                    if (phase != update.Phase)
+                    {
+                        if (phase is not null) _progressService.CompleteStep(progressId, phase, "Completed");
+                        phase = update.Phase;
+                        _progressService.AddStep(progressId, phase, phase);
+                    }
+                    _progressService.UpdateStep(progressId, phase, phase,
+                        update.Total is > 0 ? $"{update.Completed:N0} / {update.Total:N0}" : string.Empty);
+                    _progressService.SetStatus(progressId, phase);
                 }
-            }
-            return map;
-        }
-
-        private static int? GetFirstAvailableColumn(
-            IReadOnlyDictionary<string, int> map,
-            params string[] columnNames)
-        {
-            foreach (var columnName in columnNames)
-            {
-                if (map.TryGetValue(columnName, out var column))
-                {
-                    return column;
-                }
-            }
-
-            return null;
-        }
-
-        private static string? GetCellText(ExcelWorksheet ws, int row, int column)
-        {
-            var cell = ws.Cells[row, column];
-            var text = cell?.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                return text;
-            }
-
-            var value = cell?.Value?.ToString()?.Trim();
-            return string.IsNullOrWhiteSpace(value) ? null : value;
+                catch { _logger.LogWarning("Import progress update failed."); }
+            });
+            if (phase is not null) _progressService.CompleteStep(progressId, phase, "Completed");
+            result.InsertedRows = persisted.Inserted;
+            ImportCompletion.Notify(result, progressId, CacheDataDomains.Donations | CacheDataDomains.DonorContacts,
+                _cacheInvalidator, _progressService, _logger);
+            return result;
         }
     }
 }

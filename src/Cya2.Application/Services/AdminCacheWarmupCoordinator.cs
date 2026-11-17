@@ -13,13 +13,18 @@ public sealed class AdminCacheWarmupCoordinator : IAdminCacheWarmupCoordinator, 
     private bool _followUpRequested;
     private bool _followUpWarmSummaries;
     private bool _disposed;
+    private readonly ICacheInvalidationVersion? _versions;
+    private long _runningGeneration;
+    private bool _runningWarmSummaries;
 
     public AdminCacheWarmupCoordinator(
         IServiceScopeFactory scopeFactory,
-        ILogger<AdminCacheWarmupCoordinator> logger)
+        ILogger<AdminCacheWarmupCoordinator> logger,
+        ICacheInvalidationVersion? versions = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _versions = versions;
     }
 
     public void QueueWarmup(bool warmSummaries = true)
@@ -34,6 +39,11 @@ public sealed class AdminCacheWarmupCoordinator : IAdminCacheWarmupCoordinator, 
 
             if (_warmupTask is { IsCompleted: false })
             {
+                if (_versions is not null && _runningGeneration == _versions.Current && (_runningWarmSummaries || !warmSummaries))
+                {
+                    _logger.LogInformation("Central cache warmup request coalesced with the running generation");
+                    return;
+                }
                 _followUpRequested = true;
                 _followUpWarmSummaries |= warmSummaries;
                 _logger.LogInformation(
@@ -73,6 +83,8 @@ public sealed class AdminCacheWarmupCoordinator : IAdminCacheWarmupCoordinator, 
 
     private void StartWarmupLocked(bool warmSummaries)
     {
+        _runningGeneration = _versions?.Current ?? 0;
+        _runningWarmSummaries = warmSummaries;
         _logger.LogInformation("Central cache warmup queued: summaryWarming={SummaryWarming}", warmSummaries);
         _warmupTask = Task.Run(() => WarmupAsync(warmSummaries));
     }

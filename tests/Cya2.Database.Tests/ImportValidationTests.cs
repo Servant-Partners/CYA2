@@ -13,7 +13,7 @@ namespace Cya2.Database.Tests;
 
 public sealed class ImportValidationTests
 {
-    private static readonly string[] DonationHeaders = ["Gift Date", "Name", "Gift Payment Type", "Gift Type", "Fund Split Amount", "Fund Notes", "Soft Credit Recipient Name", "Preferred Address Line 1", "Preferred City", "Preferred State", "Preferred ZIP", "Preferred Country", "Personal Email Number", "Home Phone Number", "Personal Mobile Phone Number", "Gift Is Anonymous", "Gift Import ID", "Primary Addressee", "Honor/Memorial Name", "Constituent ID", "Soft Credit Recipient ID"];
+    private static readonly string[] DonationHeaders = ["Gift Date", "Name", "Gift Payment Type", "Gift Type", "Fund Split Amount", "Fund Notes", "Soft Credit Recipient Name", "Preferred Address Line 1", "Preferred City", "Preferred State", "Preferred ZIP", "Preferred Country", "Personal Email Number", "Home Phone Number", "Personal Mobile Phone Number", "Gift Is Anonymous", "Gift Import ID", "Primary Addressee", "Honor/Memorial Name", "Constituent ID", "Soft Credit Recipient ID", "Tribute System Record ID"];
     private static readonly string[] AccountingHeaders = ["Class", "Date", "Num", "Amount", "Account #", "Account", "Type"];
 
     [Fact]
@@ -38,6 +38,7 @@ public sealed class ImportValidationTests
         var sheet = package.Workbook.Worksheets[0];
         sheet.Cells[2, 20].Value = "000123";
         sheet.Cells[3, 20].Value = "organization-1";
+        sheet.Cells[3, 21].Value = "000123";
         sheet.Cells[3, 2].Value = "Employer Organization";
         sheet.Cells[3, 18].Value = "Employer Organization";
         sheet.Cells[3, 7].Value = "Synthetic Donor";
@@ -105,7 +106,7 @@ public sealed class ImportValidationTests
         using var workbook = new MemoryStream(package.GetAsByteArray());
         var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
         Assert.Empty(result.Errors);
-        Assert.Equal(anonymous ? "anonymous" : "id:direct", repository.Published[0].Donor.IdentityKey);
+        Assert.Equal(anonymous ? "anonymous:id:direct" : "id:direct", repository.Published[0].Donor.IdentityKey);
         if (anonymous) Assert.Null(repository.Published[0].SoftCreditRecipientId);
     }
 
@@ -258,7 +259,7 @@ public sealed class ImportValidationTests
     }
 
     [Fact]
-    public async Task FrequencyHistoryMatchesResolvedIdentityNotSourceName()
+    public async Task FrequencyClassificationIsDeferredToFinalRepositoryHistory()
     {
         var repository = new Repository();
         repository.HistoryFactory = keys =>
@@ -271,8 +272,10 @@ public sealed class ImportValidationTests
             }).ToList();
         };
         using var workbook = Workbook("donations");
-        await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
-        Assert.All(repository.Published, row => Assert.Equal(Cya2.Core.Enums.DonorFrequency.Monthly, row.Frequency));
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Empty(result.Errors);
+        Assert.Equal(2, repository.Published.Count);
+        Assert.All(repository.Published, row => Assert.Null(row.Frequency));
     }
 
     [Theory]
@@ -392,6 +395,7 @@ public sealed class ImportValidationTests
                     "Name" or "Primary Addressee" => "Synthetic Donor",
                     "Fund Notes" => "Synthetic Fund",
                     "Gift Import ID" => $"synthetic-{row}",
+                    "Constituent ID" => "000synthetic",
                     "Class" => "Synthetic Class",
                     "Account" => "Synthetic Account",
                     "Account #" => "1000",

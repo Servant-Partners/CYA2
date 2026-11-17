@@ -16,7 +16,7 @@ public sealed class HomeSummaryCacheTests
     public async Task WarmedInternSummary_IsReusedByDashboardWithAccountOverheadAndGeneration()
     {
         var now = DateTime.Now;
-        var account = new Account { AccountId = 12, Fund = "Intern: Jane Doe", AccountNumber = "INT-12", Overhead = 12m };
+        var account = new Account { AccountId = 12, Fund = "Intern: Jane Doe", AccountKind = "Intern", InternSourceId = "Jane Doe", DisplayName = "Jane Doe", Overhead = 12m };
         var contextAccount = new UserAccountContextAccount { AccountId = 12, Fund = account.Fund, InternName = "Jane Doe", Overhead = 12m };
         var context = new DashboardContext(contextAccount);
         var cache = new HomeSummaryCache(NullLogger<HomeSummaryCache>.Instance);

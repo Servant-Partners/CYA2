@@ -31,23 +31,15 @@ public sealed class UserAdministrationStore(IConfiguration configuration, IDatab
 
     public Task<UserAdministrationResult> CreateAsync(CreateUserCommand command) => ExecuteAsync(command.ActorId, async (conn, tx) =>
     {
+        if (command.AuthLevel is not ("User" or "Viewer" or "Admin"))
+            return Result(UserAdministrationStatus.InvalidAccount);
         if (await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM Users WHERE Email=@Email", new { command.Email }, tx) != 0)
             return Result(UserAdministrationStatus.DuplicateEmail);
 
-        var intern = string.Equals(command.AuthLevel, "Intern", StringComparison.OrdinalIgnoreCase);
-        if (intern && !command.ReuseInternAccount && await FindAccountAsync(conn, tx, InternAccountUtility.BuildInternFund(command.Name)) is not null)
-            return Result(UserAdministrationStatus.InternReuseRequired);
-
-        if (!intern && !await AccountsExistAsync(conn, tx, command.AccountIds))
+        if (!await AccountsExistAsync(conn, tx, command.AccountIds))
             return Result(UserAdministrationStatus.InvalidAccount);
 
         var id = await conn.ExecuteScalarAsync<int>("INSERT INTO Users (GoogleId, Email, Name, Language, AuthLevel) VALUES (NULL, @Email, @Name, 'en-US', @AuthLevel); SELECT LAST_INSERT_ID();", command, tx);
-        if (intern)
-        {
-            var status = await EnsureInternAsync(conn, tx, id, command.Name, null, command.ReuseInternAccount);
-            if (status != UserAdministrationStatus.Success) return Result(status);
-        }
-        else
         {
             foreach (var accountId in command.AccountIds.Distinct())
                 await conn.ExecuteAsync("INSERT INTO AccountsUsers (UserId, AccountId) VALUES (@id, @accountId)", new { id, accountId }, tx);
@@ -55,9 +47,9 @@ public sealed class UserAdministrationStore(IConfiguration configuration, IDatab
                 await conn.ExecuteAsync("UPDATE Users SET DefaultAccount=@accountId WHERE Id=@id", new { id, accountId = command.AccountIds[0] }, tx);
         }
         await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.AdminUserCreated, _logger, targetUserId: id);
-        if (intern || command.AccountIds.Count > 0)
-            await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.AccountAccessGranted, _logger, itemCount: intern ? 1 : command.AccountIds.Distinct().Count(), targetUserId: id);
-        return Result(UserAdministrationStatus.Success, intern);
+        if (command.AccountIds.Count > 0)
+            await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.AccountAccessGranted, _logger, itemCount: command.AccountIds.Distinct().Count(), targetUserId: id);
+        return Result(UserAdministrationStatus.Success);
     });
 
     public Task<UserAdministrationResult> UpdateAsync(UpdateUserCommand command) => ExecuteAsync(command.ActorId, async (conn, tx) =>
@@ -67,9 +59,7 @@ public sealed class UserAdministrationStore(IConfiguration configuration, IDatab
         var name = string.IsNullOrWhiteSpace(command.Name) ? user.Name : command.Name.Trim();
         var email = string.IsNullOrWhiteSpace(command.Email) ? user.Email : command.Email.Trim();
         var role = string.IsNullOrWhiteSpace(command.AuthLevel) ? user.AuthLevel : command.AuthLevel.Trim();
-        if (user.IsIntern() && !string.Equals(role, user.AuthLevel, StringComparison.OrdinalIgnoreCase))
-            return Result(UserAdministrationStatus.InternRoleChange);
-        if (user.IsIntern()) role = user.AuthLevel;
+        if (role is not ("User" or "Viewer" or "Admin")) return Result(UserAdministrationStatus.InvalidAccount);
         if (user.IsAdmin() && !string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase))
         {
             if (command.ActorId == command.UserId) return Result(UserAdministrationStatus.SelfChange);
@@ -85,12 +75,6 @@ public sealed class UserAdministrationStore(IConfiguration configuration, IDatab
         if (command.RevokeAccountId is int revokeId && !await HasAccessAsync(conn, tx, command.UserId, revokeId))
             return Result(UserAdministrationStatus.AccountNotLinked);
 
-        var intern = string.Equals(role, "Intern", StringComparison.OrdinalIgnoreCase);
-        if (intern && (!string.IsNullOrWhiteSpace(command.Name) || !string.IsNullOrWhiteSpace(command.Email) || !string.IsNullOrWhiteSpace(command.AuthLevel)))
-        {
-            var status = await EnsureInternAsync(conn, tx, user.Id, name, user.Name, command.ReuseInternAccount);
-            if (status != UserAdministrationStatus.Success) return Result(status);
-        }
         await conn.ExecuteAsync("UPDATE Users SET Name=@name, Email=@email, AuthLevel=@role WHERE Id=@UserId", new { name, email, role, command.UserId }, tx);
         if (command.GrantAccountId is int grant)
         {
@@ -108,7 +92,7 @@ public sealed class UserAdministrationStore(IConfiguration configuration, IDatab
             await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.AccountAccessGranted, _logger, itemCount: 1, targetUserId: command.UserId);
         if (command.RevokeAccountId.HasValue)
             await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.AccountAccessRevoked, _logger, itemCount: 1, targetUserId: command.UserId);
-        return Result(UserAdministrationStatus.Success, intern);
+        return Result(UserAdministrationStatus.Success);
     });
 
     public Task<UserAdministrationResult> DeleteAsync(int actorId, int userId) => ExecuteAsync(actorId, async (conn, tx) =>
@@ -167,33 +151,4 @@ public sealed class UserAdministrationStore(IConfiguration configuration, IDatab
         return ids.All(id => id > 0) && await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM Accounts WHERE AccountId IN @ids", new { ids }, tx) == ids.Distinct().Count();
     }
 
-    private static Task<Account?> FindAccountAsync(MySqlConnection conn, MySqlTransaction tx, string fund) =>
-        conn.QueryFirstOrDefaultAsync<Account>("SELECT AccountId, Fund FROM Accounts WHERE Fund=@fund LIMIT 1 FOR UPDATE", new { fund }, tx);
-
-    private static async Task<UserAdministrationStatus> EnsureInternAsync(MySqlConnection conn, MySqlTransaction tx, int userId, string name, string? oldName, bool reuse)
-    {
-        var fund = InternAccountUtility.BuildInternFund(name);
-        var desired = await FindAccountAsync(conn, tx, fund);
-        var linked = (await conn.QueryAsync<Account>("SELECT a.AccountId, a.Fund FROM Accounts a JOIN AccountsUsers au ON au.AccountId=a.AccountId WHERE au.UserId=@userId ORDER BY a.Fund FOR UPDATE", new { userId }, tx)).FirstOrDefault(a => InternAccountUtility.IsInternFund(a.Fund));
-        if (desired is not null && desired.AccountId != linked?.AccountId && !reuse) return UserAdministrationStatus.InternReuseRequired;
-        if (desired is not null && linked is not null && desired.AccountId != linked.AccountId)
-            await conn.ExecuteAsync("DELETE FROM AccountsUsers WHERE UserId=@userId AND AccountId=@id", new { userId, id = linked.AccountId }, tx);
-        if (desired is null)
-        {
-            linked ??= string.IsNullOrWhiteSpace(oldName) ? null : await FindAccountAsync(conn, tx, InternAccountUtility.BuildInternFund(oldName));
-            if (linked is not null)
-            {
-                await conn.ExecuteAsync("UPDATE Accounts SET Fund=@fund WHERE AccountId=@id", new { fund, id = linked.AccountId }, tx);
-                desired = linked;
-            }
-            else
-            {
-                var id = await conn.ExecuteScalarAsync<int>("INSERT INTO Accounts (Fund, AccountingClass, AccountNumber, CreatedAt, Overhead, SoftCredit, BalanceAdjustment) VALUES (@fund, NULL, @number, UTC_TIMESTAMP(), 12, '', 0); SELECT LAST_INSERT_ID();", new { fund, number = $"INT-{userId}" }, tx);
-                desired = new Account { AccountId = id };
-            }
-        }
-        await conn.ExecuteAsync("INSERT INTO AccountsUsers (UserId, AccountId) VALUES (@userId, @id) ON DUPLICATE KEY UPDATE AccountId=VALUES(AccountId)", new { userId, id = desired.AccountId }, tx);
-        await conn.ExecuteAsync("UPDATE Users SET DefaultAccount=@id WHERE Id=@userId", new { userId, id = desired.AccountId }, tx);
-        return UserAdministrationStatus.Success;
-    }
 }

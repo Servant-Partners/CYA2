@@ -21,8 +21,8 @@ public sealed class CacheRebuildInternIsolationTests
         var accounts = new[]
         {
             new Account { AccountId = 1, Fund = "General", AccountNumber = "100" },
-            new Account { AccountId = 2, Fund = "Intern: Jane Doe", AccountNumber = "INT-2" },
-            new Account { AccountId = 3, Fund = "Intern: John Doe", AccountNumber = "INT-3" }
+            new Account { AccountId = 2, Fund = "Intern: Jane Doe", AccountKind = "Intern", InternSourceId = "Jane Doe", DisplayName = "Jane Doe" },
+            new Account { AccountId = 3, Fund = "Intern: John Doe", AccountKind = "Intern", InternSourceId = "John Doe", DisplayName = "John Doe" }
         };
         var versions = new CacheInvalidationVersion();
         var shared = new AdminSharedCache();
@@ -51,8 +51,8 @@ public sealed class CacheRebuildInternIsolationTests
         var accounts = new[]
         {
             new Account { AccountId = 1, Fund = "General", AccountNumber = "100" },
-            new Account { AccountId = 2, Fund = "Intern: Jane Doe", AccountNumber = "INT-2" },
-            new Account { AccountId = 3, Fund = "Intern: John Doe", AccountNumber = "INT-3" }
+            new Account { AccountId = 2, Fund = "Intern: Jane Doe", AccountKind = "Intern", InternSourceId = "Jane Doe", DisplayName = "Jane Doe" },
+            new Account { AccountId = 3, Fund = "Intern: John Doe", AccountKind = "Intern", InternSourceId = "John Doe", DisplayName = "John Doe" }
         };
         var preload = new Preload(accounts);
         var donations = new DonationReader();

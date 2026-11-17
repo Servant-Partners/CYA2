@@ -83,12 +83,16 @@ namespace cya2.Controllers
             _logger.LogInformation("Confirming donation import for preview {PreviewId}", request.PreviewId);
             try
             {
-                var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "donations", ct);
+                var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "donations", request.OldDateAcknowledged, ct);
                 return Ok(result);
             }
             catch (ImportAuthorizationException)
             {
                 return NotFound("The import is no longer available.");
+            }
+            catch (ImportUploadValidationException exception)
+            {
+                return BadRequest(exception.Message);
             }
         }
 
@@ -175,5 +179,6 @@ namespace cya2.Controllers
     public sealed class ConfirmImportRequest
     {
         public string PreviewId { get; set; } = string.Empty;
+        public bool OldDateAcknowledged { get; set; }
     }
 }

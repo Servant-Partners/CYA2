@@ -213,6 +213,9 @@ public class UserManagementService
                 return new AdminUserOperationDto { IsSuccess = false, Message = "Invalid user id." };
             }
 
+            if (!string.IsNullOrWhiteSpace(request.AuthLevel) && request.AuthLevel is not ("User" or "Viewer" or "Admin"))
+                return new AdminUserOperationDto { IsSuccess = false, Message = "Choose User, Viewer, or Admin. Interns are accounts, not login roles." };
+
             var profileChanged = !string.IsNullOrWhiteSpace(request.Name) ||
                 !string.IsNullOrWhiteSpace(request.Email) || !string.IsNullOrWhiteSpace(request.AuthLevel);
             if (!profileChanged && request.GrantAccountId is null && request.RevokeAccountId is null)
@@ -295,6 +298,9 @@ public class UserManagementService
 
             if (string.IsNullOrWhiteSpace(name))
                 return new AdminUserOperationDto { IsSuccess = false, Message = "Name is required" };
+
+            if (!string.IsNullOrWhiteSpace(authLevel) && authLevel is not ("User" or "Viewer" or "Admin"))
+                return new AdminUserOperationDto { IsSuccess = false, Message = "Choose User, Viewer, or Admin. Create intern accounts in account management." };
 
             if (!IsOrganizationEmail(email))
                 return new AdminUserOperationDto { IsSuccess = false, Message = "A valid @scene8.net email is required." };

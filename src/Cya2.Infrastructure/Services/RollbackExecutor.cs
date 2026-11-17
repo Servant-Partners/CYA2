@@ -199,10 +199,10 @@ WHERE backup.BackupId = @BackupId";
                         INSERT INTO DonationData
                         (Id, DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType,
                          Amount, Fund, InternName, PrimaryAddressee, SoftCreditName,
-                         IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit)
+                         IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson)
                          SELECT Id, DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType,
                                  Amount, Fund, InternName, PrimaryAddressee, SoftCreditName,
-                                COALESCE(IsAnonymous, 0), Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit
+                                COALESCE(IsAnonymous, 0), Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson
                          FROM DonationDataBackup
                          WHERE BackupId = @BackupId
                            AND Id <> 0";

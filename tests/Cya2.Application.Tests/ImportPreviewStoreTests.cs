@@ -74,6 +74,34 @@ public sealed class ImportPreviewStoreTests
         Assert.True(store.TrySet("replacement", new ImportPreview(new byte[20], "test.xlsx", "", DateTime.UtcNow, "owner-2", "donations")));
     }
 
+    [Fact]
+    public void OwnedAccessRejectsExpiredPreviewWithoutCleanupWorker()
+    {
+        var store = CreateStore();
+        Assert.True(store.TrySet("old", new ImportPreview(new byte[10], "test.xlsx", "", DateTime.UtcNow.AddMinutes(-16), "owner", "donations")));
+        Assert.False(store.TryRemoveOwned("old", "owner", "donations", out _));
+    }
+
+    [Fact]
+    public void AdmissionReclaimsExpiredPreviewCapacity()
+    {
+        var store = CreateStore(maximumPreviews: 1, maximumBytes: 20);
+        Assert.True(store.TrySet("old", new ImportPreview(new byte[20], "test.xlsx", "", DateTime.UtcNow.AddMinutes(-16), "owner", "donations")));
+        Assert.True(store.TrySet("new", CreatePreview(20)));
+    }
+
+    [Fact]
+    public void ClaimedPreviewKeepsCapacityAndSurvivesRejectedAdmission()
+    {
+        var store = CreateStore(maximumPreviews: 1, maximumBytes: 20);
+        Assert.True(store.TrySet("preview", CreatePreview(20)));
+        Assert.True(store.TryClaimOwned("preview", "owner", "donations", out _, _ => true));
+        Assert.False(store.TrySet("other", CreatePreview(20)));
+        Assert.False(store.TryRemoveOwned("preview", "owner", "donations", out _));
+        store.ReleaseClaim("preview", consumed: false);
+        Assert.True(store.TryRemoveOwned("preview", "owner", "donations", out _));
+    }
+
     private static ImportPreviewStore CreateStore(int maximumPreviews = 2, long maximumBytes = 100)
         => new(Options.Create(new ImportUploadOptions
         {

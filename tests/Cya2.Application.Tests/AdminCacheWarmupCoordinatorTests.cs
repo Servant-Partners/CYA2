@@ -29,6 +29,34 @@ public sealed class AdminCacheWarmupCoordinatorTests
         Assert.Equal([false, true], rebuild.WarmSummaries);
     }
 
+    [Fact]
+    public async Task QueueWarmup_SameGenerationDoesNotRebuildTwice()
+    {
+        var rebuild = new BlockingCacheRebuildService();
+        using var coordinator = new AdminCacheWarmupCoordinator(new RebuildScopeFactory(rebuild), NullLogger<AdminCacheWarmupCoordinator>.Instance, new CacheInvalidationVersion());
+        coordinator.QueueWarmup();
+        await rebuild.FirstRebuildStarted.Task;
+        coordinator.QueueWarmup();
+        rebuild.ReleaseFirstRebuild();
+        await coordinator.WaitForWarmupAsync();
+        Assert.Equal([true], rebuild.WarmSummaries);
+    }
+
+    [Fact]
+    public async Task QueueWarmup_NewGenerationRequiresFollowUp()
+    {
+        var rebuild = new BlockingCacheRebuildService();
+        var versions = new CacheInvalidationVersion();
+        using var coordinator = new AdminCacheWarmupCoordinator(new RebuildScopeFactory(rebuild), NullLogger<AdminCacheWarmupCoordinator>.Instance, versions);
+        coordinator.QueueWarmup();
+        await rebuild.FirstRebuildStarted.Task;
+        versions.Invalidate();
+        coordinator.QueueWarmup();
+        rebuild.ReleaseFirstRebuild();
+        await coordinator.WaitForWarmupAsync();
+        Assert.Equal([true, true], rebuild.WarmSummaries);
+    }
+
     private sealed class BlockingCacheRebuildService : ICacheRebuildService
     {
         private readonly TaskCompletionSource _firstRebuildStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);

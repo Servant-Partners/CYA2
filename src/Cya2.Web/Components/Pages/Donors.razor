@@ -115,7 +115,7 @@
                                      Change="@(async args => await accountSelection(args?.ToString() ?? string.Empty))"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                      AllowFiltering="@isAdminOrViewer"
-                                     TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))"
+                                     TextSelector="@(account => account.DisplayName)"
                                      Class="account-selector-dropdown-inline" />
                     }
                 </div>
@@ -362,7 +362,7 @@
             isAdminOrViewer = user.IsInRole("Admin")
                       || string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase)
                       || string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             presetOptions = GetPresetOptions();
             dateRangeState = DateRangeStateService.InitializeDateRange(SessionUserStateService);
@@ -381,13 +381,11 @@
                 Fund = account.Fund,
                 // Keep intern identity on selections because intern donor rows are keyed by intern context, not Fund alone.
                 InternName = userContext.IsIntern ? userContext.InternName : account.InternName,
-                DisplayName = userContext.IsIntern
-                    ? userContext.InternName
-                    : string.IsNullOrWhiteSpace(account.InternName) ? account.DisplayName : account.InternName,
+                DisplayName = string.IsNullOrWhiteSpace(account.InternName) ? account.DisplayName : account.DisplayName + " (Intern)",
                 AccountingClass = account.AccountingClass,
                 AccountNumber = account.AccountNumber,
                 Overhead = account.Overhead
-            }).GroupBy(account => account.SelectionKey, StringComparer.OrdinalIgnoreCase)
+            }).GroupBy(account => account.AccountId)
               .Select(group => group.First())
               .ToList() ?? new List<AccountOptionDto>();
 
@@ -579,9 +577,9 @@
                 .ToList();
             hasDonorResults = true;
 
-            SessionUserStateService.SelectedAccountFund = currentAccount.Fund;
+            SessionUserStateService.SelectedAccountFund = currentAccount.SelectionKey;
             if (!string.IsNullOrWhiteSpace(userId))
-                UserSelectionService.SetSelectedAccount(userId, currentAccount.Fund);
+                UserSelectionService.SetSelectedAccount(userId, currentAccount.SelectionKey);
 
             Logger.LogInformation("Loaded {Count} donors for accountId={AccountId}", donorsInRange.Count, currentAccount.AccountId);
             lastDonorLoadKey = requestKey;

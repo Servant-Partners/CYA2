@@ -1,6 +1,12 @@
 @inject DialogService DialogService
 @inject IStringLocalizer<Resource> Localizer
 
+@if (_confirmed)
+{
+    <UploadProgressDialog ProgressId="@ProgressId" SubmitImport="@SubmitImport" />
+}
+else
+{
 <RadzenCard Class="upload-confirm-dialog-card" Style="padding: 1rem; width:100%; max-width:100%; box-sizing:border-box;">
     <RadzenStack Orientation="Orientation.Vertical" Gap="1rem">
         <RadzenText TextStyle="TextStyle.H6">@Localizer["ConfirmFileUpload"]</RadzenText>
@@ -20,15 +26,36 @@
             @Localizer["ConfirmFileUploadMessage"]
         </RadzenText>
 
+        @if (Preview?.MinimumDonationDate is { } boundary)
+        {
+            <div>
+                @Localizer["DonationReplacementBoundary", boundary.ToString("yyyy-MM-dd")]
+                <div>@Localizer["DonationPreviewCounts", Preview.CanonicalDonationCount ?? 0, Preview.DuplicateRowsMerged]</div>
+                @if (Preview.UnresolvedNormalDonationCount is { } normal && Preview.UnresolvedInternDonationCount is { } intern)
+                {
+                    <div>@Localizer["DonationUnresolvedCounts", normal, intern]</div>
+                    <div>@Localizer["DonationMappingPreviewNotice"]</div>
+                }
+            </div>
+            @if (Preview.RequiresOldDateAcknowledgment)
+            {
+                <label>
+                    <input type="checkbox" @bind="_oldDateAcknowledged" />
+                    @Localizer["DonationOldDateConsent"]
+                </label>
+            }
+        }
+
         <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.75rem" Class="upload-confirm-actions">
             <RadzenButton Text="@Localizer["Cancel"]" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(false))" />
             <RadzenButton Text="@Localizer["Confirm"]"
                           ButtonStyle="ButtonStyle.Primary"
-                          Click="@(() => DialogService.Close(true))"
-                          Disabled="@(Preview == null || !IsLikelyExcelFile(Preview))" />
+                          Click="@ConfirmUpload"
+                          Disabled="@(Preview == null || !IsLikelyExcelFile(Preview) || (Preview.RequiresOldDateAcknowledgment && !_oldDateAcknowledged))" />
         </RadzenStack>
     </RadzenStack>
 </RadzenCard>
+}
 
 <style>
     .upload-confirm-dialog-card {
@@ -52,6 +79,16 @@
 
 @code {
     [Parameter] public Cya2.Application.Interfaces.FilePreviewResult? Preview { get; set; }
+    [Parameter] public string ProgressId { get; set; } = string.Empty;
+    [Parameter] public Func<Task>? SubmitImport { get; set; }
+    private bool _oldDateAcknowledged;
+    private bool _confirmed;
+
+    private void ConfirmUpload()
+    {
+        if (SubmitImport is null) DialogService.Close(true);
+        else _confirmed = true;
+    }
 
     private static string FormatSize(long bytes)
     {

@@ -419,7 +419,7 @@ else
                                      Change="@OnAccountSelectionAsync"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                       AllowFiltering="@canSearchAccounts"
-                                      TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))"
+                                      TextSelector="@(account => account.DisplayName)"
                                      Class="account-selector-dropdown-inline" />
                     }
                 </div>
@@ -1285,7 +1285,7 @@ private bool showMissingGiftDialog = false;
             var now = DateTime.Today;
             var range = new Cya2.Core.ValueObjects.DateRange(now.AddMonths(-6), now);
             var account = dashboardData.UserAccounts.FirstOrDefault(a =>
-                string.Equals(a.Fund, selectedAccount, StringComparison.OrdinalIgnoreCase));
+                string.Equals(a.SelectionKey, selectedAccount, StringComparison.Ordinal));
 
             missingGiftDonors = account == null
                 ? new()
@@ -1293,6 +1293,7 @@ private bool showMissingGiftDialog = false;
                 {
                     AccountId = account.AccountId,
                     Fund = account.Fund,
+                    InternName = account.InternName,
                     AccountingClass = account.AccountingClass,
                     AccountNumber = account.AccountNumber,
                     Overhead = account.Overhead
@@ -1350,7 +1351,7 @@ private bool showMissingGiftDialog = false;
             var authLevel = user.FindFirstValue("AuthLevel") ?? string.Empty;
             isAdminUser = user.IsInRole("Admin") || string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase);
             canSearchAccounts = isAdminUser || string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             userName = user.FindFirstValue("UserName") ??
                       user.FindFirstValue(ClaimTypes.GivenName) ??
@@ -1389,9 +1390,9 @@ private bool showMissingGiftDialog = false;
                 return;
             }
 
-            requestedFund = homeAuthorization.Context?.IsIntern == true
-                ? homeAuthorization.Context.InternName
-                : homeAuthorization.SelectedAccount.Fund;
+            requestedFund = string.IsNullOrWhiteSpace(homeAuthorization.SelectedAccount.InternName)
+                ? homeAuthorization.SelectedAccount.Fund
+                : homeAuthorization.SelectedAccount.InternName;
             dashboardData = await DashboardService.GetDashboardSummaryDataAsync(requestedFund, cachedUserId);
             isInternUser = dashboardData.IsInternUser;
             canSearchAccounts = dashboardData.CanSearchAccounts;
@@ -1634,9 +1635,9 @@ private bool showMissingGiftDialog = false;
             }
 
             isRequestedAccountAccessDenied = false;
-            selectedAccount = homeAuthorization.Context?.IsIntern == true
-                ? homeAuthorization.Context.InternName
-                : homeAuthorization.SelectedAccount.Fund ?? string.Empty;
+            selectedAccount = string.IsNullOrWhiteSpace(homeAuthorization.SelectedAccount.InternName)
+                ? homeAuthorization.SelectedAccount.Fund ?? string.Empty
+                : homeAuthorization.SelectedAccount.InternName;
             RefreshSelectedAccountMode();
             var result = await DashboardService.GetDashboardDataAsync(selectedAccount, selectionUserId);
             if (requestVersion != accountRequestVersion)
@@ -1645,6 +1646,7 @@ private bool showMissingGiftDialog = false;
             }
 
             dashboardData = result;
+            RefreshSelectedAccountMode();
             Logger.LogInformation("Home account selection data loaded");
 
 
@@ -1787,7 +1789,8 @@ private bool showMissingGiftDialog = false;
     private void RefreshSelectedAccountMode()
     {
         // Intern mode hides fund-only Home features because intern accounts have donation data but no accounting data.
-        isInternAccountSelected = InternAccountUtility.IsInternFund(selectedAccount);
+        isInternAccountSelected = dashboardData.UserAccounts.Any(account =>
+            string.Equals(account.SelectionKey, selectedAccount, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(account.InternName));
     }
 
     private Cya2.Core.ValueObjects.DateRange ResolveActiveDateRange()
