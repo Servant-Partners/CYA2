@@ -56,8 +56,9 @@ if (!string.IsNullOrEmpty(mysqlConnStr))
 }
 
 var configuredConnectionString = builder.Configuration.GetConnectionString("default");
+var maximumPoolSize = MySqlConnectionStringConfiguration.GetMaximumPoolSize(builder.Configuration);
 var hasInvalidConnectionStringConfiguration =
-    !MySqlConnectionStringConfiguration.TryNormalize(configuredConnectionString, 15u, out var normalizedConnectionString);
+    !MySqlConnectionStringConfiguration.TryNormalize(configuredConnectionString, maximumPoolSize, out var normalizedConnectionString);
 
 if (hasInvalidConnectionStringConfiguration)
 {
