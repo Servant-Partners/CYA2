@@ -11,6 +11,7 @@ public sealed class FilePreviewResult
     public string FileName { get; set; } = string.Empty;
     public long FileSizeBytes { get; set; }
     public string ContentType { get; set; } = string.Empty;
+    public int? SourceRowCount { get; set; }
     public int? CanonicalDonationCount { get; set; }
     public int DuplicateRowsMerged { get; set; }
     public int? UnresolvedNormalDonationCount { get; set; }

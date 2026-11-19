@@ -1106,9 +1106,10 @@
   </data>
   <data name="ImportCancelRequested" xml:space="preserve"><value>Cancellation requested</value></data>
   <data name="ImportCancelUnavailable" xml:space="preserve"><value>Cancellation is unavailable. The import may already have finished. Closing this dialog does not cancel an import.</value></data>
-  <data name="DonationReplacementBoundary" xml:space="preserve"><value>Donation replacement: {0} and every later date, without an upper date limit.</value></data>
-  <data name="DonationPreviewCounts" xml:space="preserve"><value>Donations: {0}; duplicate rows consolidated: {1}.</value></data>
-  <data name="DonationUnresolvedCounts" xml:space="preserve"><value>Donations without an account mapping: {0} normal; {1} intern.</value></data>
-  <data name="DonationMappingPreviewNotice" xml:space="preserve"><value>Counts reflect current configuration and may change before import. Unmatched or conflicting mappings do not prevent upload; donations remain stored but unavailable through account views until uniquely configured.</value></data>
+  <data name="FirstDonation" xml:space="preserve"><value>First Donation:</value></data>
+  <data name="NumberOfRows" xml:space="preserve"><value>Number of Rows:</value></data>
+  <data name="NumberOfDuplicateRowsRemoved" xml:space="preserve"><value>Number of Duplicate Rows Removed:</value></data>
+  <data name="TotalNumberOfDonations" xml:space="preserve"><value>Total Number of Donations:</value></data>
   <data name="DonationOldDateConsent" xml:space="preserve"><value>I understand that this date is more than 380 days old and all donations on or after it will be replaced.</value></data>
+  <data name="PreparingUploadPreview" xml:space="preserve"><value>Uploading file.</value></data>
 </root>

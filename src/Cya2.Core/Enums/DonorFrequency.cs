@@ -34,6 +34,11 @@ public enum DonorFrequency
     /// Annual giving pattern - one or more gifts per year around same time
     /// </summary>
     Yearly = 5,
+
+    /// <summary>
+    /// Summary-only label for different current patterns across selected funds; never assigned to a gift.
+    /// </summary>
+    Mixed = 6,
     
     /// <summary>
     /// Legacy value for backward compatibility - maps to Sporadic

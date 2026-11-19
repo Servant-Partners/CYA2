@@ -716,28 +716,7 @@
                     return;
                 }
 
-                // Show confirmation dialog
-                var progressId = Guid.NewGuid().ToString("N");
-                var submitted = false;
-                var confirmed = await DialogService.OpenAsync<UploadConfirmationDialog>(
-                    title: Localizer["ConfirmUpload"],
-                    parameters: new Dictionary<string, object?>
-                    {
-                        { "Preview", preview },
-                        { "ProgressId", progressId },
-                        { "SubmitImport", (Func<Task>)(async () => { submitted = true; await SubmitImportFromPreview(preview.PreviewId, importType, preview.RequiresOldDateAcknowledgment, progressId); }) }
-                    },
-                    options: BuildAdminDialogOptions(width: "520px", height: "auto", resizable: false, showClose: true, closeDialogOnOverlayClick: false));
-
-                if (confirmed is bool b && b)
-                {
-                    _logger.LogInformation("Upload dialog completed for {Type}", importType);
-                }
-                else
-                {
-                    if (!submitted) await ImportOrchestrationService.DiscardPreviewAsync(preview.PreviewId, importType);
-                    _logger.LogInformation("Upload dialog closed for {Type}", importType);
-                }
+                await ShowUploadConfirmationAsync(preview, importType);
             }
             catch (Exception ex)
             {
@@ -749,6 +728,55 @@
                     Detail = Localizer["SafeOperationError"],
                     Duration = 4000
                 });
+            }
+        }
+
+        private async Task ShowUploadConfirmationAsync(FilePreviewResult? preview, string importType, Func<Task<FilePreviewResult>>? preparePreview = null)
+        {
+            var progressId = Guid.NewGuid().ToString("N");
+            var submitted = false;
+            var options = BuildAdminDialogOptions(width: "520px", height: "auto", resizable: false, showClose: preparePreview is null, closeDialogOnOverlayClick: false);
+            if (preparePreview is not null)
+            {
+                options.CloseDialogOnEsc = false;
+                options.ShowTitle = false;
+            }
+
+            var confirmed = await DialogService.OpenAsync<UploadConfirmationDialog>(
+                title: Localizer["ConfirmUpload"],
+                parameters: new Dictionary<string, object?>
+                {
+                    { "Preview", preview },
+                    { "PreparePreview", preparePreview is null ? null : (Func<Task<FilePreviewResult>>)(async () =>
+                        {
+                            try
+                            {
+                                return preview = await preparePreview();
+                            }
+                            finally
+                            {
+                                options.ShowTitle = true;
+                                DialogService.Refresh();
+                            }
+                        }) },
+                    { "ProgressId", progressId },
+                    { "SubmitImport", (Func<Task>)(async () =>
+                        {
+                            if (preview is null) return;
+                            submitted = true;
+                            await SubmitImportFromPreview(preview.PreviewId, importType, preview.RequiresOldDateAcknowledgment, progressId);
+                        }) }
+                },
+                options: options);
+
+            if (confirmed is bool b && b)
+            {
+                _logger.LogInformation("Upload dialog completed for {Type}", importType);
+            }
+            else
+            {
+                if (!submitted && preview is not null) await ImportOrchestrationService.DiscardPreviewAsync(preview.PreviewId, importType);
+                _logger.LogInformation("Upload dialog closed for {Type}", importType);
             }
         }
 
@@ -810,14 +838,12 @@
                 const long maxAllowedBytes = 5_000L * 1024;
                 if (file.Size > maxAllowedBytes)
                     throw new Cya2.Application.Services.ImportUploadValidationException(Localizer["UploadFileTooLarge", maxAllowedBytes / 1024].Value);
-                await using var stream = file.OpenReadStream(maxAllowedBytes);
-
-                var preview = await ImportOrchestrationService.PreviewAsync(
-                    stream, "donations", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
-
-                var raw = System.Text.Json.JsonSerializer.Serialize(preview);
-                var args = new UploadCompleteEventArgs { RawResponse = raw };
-                await HandlePreviewComplete(args, "donations");
+                await ShowUploadConfirmationAsync(null, "donations", async () =>
+                {
+                    await using var stream = file.OpenReadStream(maxAllowedBytes);
+                    return await ImportOrchestrationService.PreviewAsync(
+                        stream, "donations", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
+                });
             }
             catch (Exception ex)
             {
@@ -842,14 +868,12 @@
                 const long maxAllowedBytes = 5_000L * 1024;
                 if (file.Size > maxAllowedBytes)
                     throw new Cya2.Application.Services.ImportUploadValidationException(Localizer["UploadFileTooLarge", maxAllowedBytes / 1024].Value);
-                await using var stream = file.OpenReadStream(maxAllowedBytes);
-
-                var preview = await ImportOrchestrationService.PreviewAsync(
-                    stream, "accounting", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
-
-                var raw = System.Text.Json.JsonSerializer.Serialize(preview);
-                var args = new UploadCompleteEventArgs { RawResponse = raw };
-                await HandlePreviewComplete(args, "accounting");
+                await ShowUploadConfirmationAsync(null, "accounting", async () =>
+                {
+                    await using var stream = file.OpenReadStream(maxAllowedBytes);
+                    return await ImportOrchestrationService.PreviewAsync(
+                        stream, "accounting", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
+                });
             }
             catch (Exception ex)
             {

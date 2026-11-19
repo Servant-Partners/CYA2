@@ -2,6 +2,8 @@
 
 ## Status and purpose
 
+Frequency completion follow-up: `DONATION_FREQUENCY.md` now specifies the agreed chronological gift-pattern rules and the executed completion plan. Standard publication captures deleted/incoming change boundaries, probes affected groups for a proven Monthly checkpoint with full twelve-month context, and replays bounded pages; only unresolved affected groups fall back to complete history. This supersedes this document's earlier requirement to preserve the old whole-history classification behavior. Synthetic validation does not replace operator-run MySQL/UI/rollback acceptance, and no publication retention savings have been measured.
+
 Latest AccountId checkpoint (supersedes older pending account-mapping wording below): current configuration resolves unique normal designations and exact intern source IDs through invoker-security views, without modifying monetary rows on account CRUD. Donation reads enforce resolved AccountId and preserve primary/merged/separate Fund allocations; unknown intern IDs never fall back to normal Funds and ambiguous normal mappings are unavailable. Preview unresolved counts are informational and current-configuration based. Mapping changes clear/fence shared/overflow donation and derived donor caches. The views must be applied by the operator to an existing database; no runtime DDL or initialized-database changes occurred. Provider association/rollback acceptance remains user-run. This does not complete resource-budget or address-precedence work.
 
 The standard donation upload processor and preview/confirmation paths now use normalized source-ID validation. Publication persists donation-linked evidence, rebuilds affected contacts and frequencies, and includes the new fields in full snapshots/rollback. This is not a production-ready completion of the full plan: intern account administration/read cutover and coordinated admission/cancellation remain incomplete. The separately approved preparatory cleanup removes the unused `Accounts.OtherFunds` column. Existing databases have not been altered. The user explicitly waived further CPU/baseline work; no performance improvement is claimed.
@@ -143,18 +145,16 @@ Preserve existing behavior except for the required ID identity substitution and 
 - Contact evidence is replaced/deleted atomically with its donation. Projection removal, earlier-contact fallback, donation frequency changes, and backups roll back together on pre-commit failure.
 - No names, donor/intern source IDs, contact values, Fund/SubFund values, or raw database exception text in general diagnostics or restricted audit payloads. Restricted audit retains only the existing allowed operation metadata, numeric user references, counts, and fixed labels.
 
-### 4.6 Frequency work without business-rule changes
+### 4.6 Chronological frequency patterns and targeted replay
 
-The existing classifier considers history on both sides of a gift and includes calendar-window and longer-history dependencies. Do not assume a fixed number of prior gifts or a fixed 12-month slice is equivalent.
+The agreed follow-up replaces donor-wide historical relabeling with gift-level chronological patterns. See `DONATION_FREQUENCY.md` for the precise rules, checkpoint proof, API occurrence contract, validation scope, and approved Mixed label when selected funds' frequencies differ.
 
-Initial safe implementation:
-
-1. Preserve the existing donor/fund classification scope and classifier behavior, including same-date handling and retrospective reclassification.
-2. Fetch full necessary history only for affected groups (from removed AND incoming rows), not every donor/fund in the database.
-3. Calculate once against the final post-replacement history; remove the redundant preliminary incoming-only pass after equivalence tests demonstrate it is unnecessary.
-4. Stage results and apply changed frequencies through joined/batched updates, not one command per gift.
-5. Affected-group full history is the fallback until a smaller dependency window is proven equivalent. It may still recalculate older gifts for an affected donor; do not promise last-few-gifts performance without proof.
-6. Compare to the unchanged classifier using generated histories, including yearly-to-monthly transitions, corrections/deletions, negative amounts, multiple same-date gifts, quarterly patterns, catch-up/prepayment, and identified/unidentified anonymous gifts.
+1. Classify independently per donor/fund and preserve distinct same-date/split gifts. A new regular interval can revise its preceding boundary, not the whole history.
+2. Capture earliest changes from deleted and incoming rows before replacement. Replay final surviving data so corrections/deletions can invalidate prior patterns.
+3. Probe unchanged prefix windows of 4, 13, and 26 months for a consecutive-month Monthly checkpoint. Replay with its full twelve-month amount context; do not trust a stored frequency as an initial-state certificate.
+4. Fall back to the complete history only for affected groups without a proven checkpoint. Read 500-row keyset pages, process group descriptors in pages of 64, and stage changed updates in batches of at most 500.
+5. Use one rolling sequence per group, carrying a pending gift across pages for boundary revision. Its twelve-month gift queue is time-bounded, not fixed-row-bounded; no fixed RAM budget or measured publication retention saving is claimed.
+6. Synthetic regressions compare targeted suffix replay to full replay, including replacements/deletions and page boundaries. Provider transaction/cancellation/rollback, query-plan, and UI acceptance remain operator-run.
 
 ### 4.7 Non-login intern administration and reads
 

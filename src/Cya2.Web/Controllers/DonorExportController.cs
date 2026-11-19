@@ -255,6 +255,7 @@ namespace cya2.Controllers
         Cya2.Core.Enums.DonorFrequency.Quarterly => "Quarterly",
             Cya2.Core.Enums.DonorFrequency.Yearly => "Yearly",
             Cya2.Core.Enums.DonorFrequency.Sporadic => "Sporadic",
+            Cya2.Core.Enums.DonorFrequency.Mixed => "Mixed",
             _ => string.Empty
         };
     }

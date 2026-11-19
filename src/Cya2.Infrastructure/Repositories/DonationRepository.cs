@@ -286,9 +286,10 @@ ORDER BY DonorId, Fund, Date, Id";
                 {
                     var sorted = group.OrderBy(record => record.Date).ThenBy(record => record.Id).ToList();
                     var history = sorted.Select(record => new DonorGiftRecord { Date = record.Date, Amount = (decimal)record.Amount }).ToList();
+                    var frequencies = frequencyService.ClassifySequence(history);
                     return sorted.Select((record, index) =>
                     {
-                        var classification = frequencyService.ClassifyGift(history[index], history).Frequency;
+                        var classification = frequencies[index];
                         return (record.Id, Frequency: classification == DonorFrequency.None ? DonorFrequency.OneTime : classification);
                     });
                 })

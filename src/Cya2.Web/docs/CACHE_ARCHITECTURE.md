@@ -2,6 +2,8 @@
 
 This is the Web/Admin supplement to [the main cache architecture](../../../docs/CACHE_ARCHITECTURE.md). See [Production review](../../../docs/PRODUCTION_REVIEW.md) for known correctness gaps and acceptance status.
 
+Combined-fund donor summaries display the common per-fund frequency when funds agree, otherwise **Mixed**, in both the donor grid and export. Mixed is summary-only; gift classification and combined donor totals are unchanged. Missing-gift warnings remain fund-specific even for Mixed donors, and central warmup still hydrates contacts only for warning donors. Cache keys, invalidation, authorization, and default/selected-account and non-admin precaching schedules are unchanged.
+
 ## Admin shared cache
 
 Current AccountId donation associations are configuration projections. Mapping changes invalidate both shared/overflow donation fact caches and derived donor caches even without an upload. Unknown intern-source rows are excluded from normal Fund views; conflicting normal designations are unresolved, never duplicated across account IDs. Primary views include merged allocations, while separate allocations retain Fund-specific selection.

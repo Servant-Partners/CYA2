@@ -2,6 +2,7 @@ using Cya2.Application.DTOs;
 using Cya2.Application.Interfaces;
 using Cya2.Application.Services;
 using Cya2.Core.Entities;
+using Cya2.Core.Enums;
 using Cya2.Core.Interfaces;
 using Cya2.Core.ReadModels;
 using Cya2.Core.Services;
@@ -13,6 +14,91 @@ namespace Cya2.Application.Tests;
 
 public sealed class DonorSelectionTests
 {
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task All_RollsUpPerFundFrequencyWithoutDuplicatingDonors(bool stored, bool ranged, bool samePattern)
+    {
+        var repository = new DonationRepositoryStub();
+        repository.Donations.Clear();
+        for (var month = 1; month <= 3; month++)
+            Add("Primary", new DateTime(2025, month, 15), DonorFrequency.Monthly);
+        if (samePattern)
+        {
+            for (var month = 1; month <= 3; month++)
+                Add("Separate", new DateTime(2025, month, 15), DonorFrequency.Monthly);
+        }
+        else
+        {
+            Add("Separate", new DateTime(2024, 1, 15), DonorFrequency.Yearly);
+            Add("Separate", new DateTime(2025, 1, 15), DonorFrequency.Yearly);
+        }
+
+        var service = CreateService(repository);
+        var account = new AccountOptionDto { AccountId = 42, Fund = "Primary" };
+        var range = ranged ? new DateRange(new DateTime(2024, 1, 1), new DateTime(2025, 12, 31)) : null;
+        var summary = Assert.Single(await service.GetDonorSummariesForSelectionAsync(account, "All", range));
+
+        Assert.Equal(samePattern ? DonorFrequency.Monthly : DonorFrequency.Mixed, summary.Frequency);
+        Assert.Equal(repository.Donations.Count * 10m, summary.Total);
+        var primary = Assert.Single(await service.GetDonorSummariesForSelectionAsync(account, "Primary", range));
+        Assert.Equal(DonorFrequency.Monthly, primary.Frequency);
+
+        void Add(string fund, DateTime date, DonorFrequency frequency) => repository.Donations.Add(new()
+        {
+            Id = repository.Donations.Count + 1, DonorId = 1, DonorDisplayName = "Synthetic donor",
+            AccountName = "Synthetic donor", Fund = fund, Date = date, Amount = 10,
+            Frequency = stored ? frequency : null
+        });
+    }
+
+    [Fact]
+    public async Task All_DoesNotInventMonthlyFromOneTimeGiftsInDifferentFunds()
+    {
+        var repository = new DonationRepositoryStub();
+        repository.Donations.RemoveAt(1);
+        foreach (var row in repository.Donations)
+        {
+            row.DonorId = 1;
+            row.DonorDisplayName = "Synthetic donor";
+        }
+        repository.Donations[0].Date = new DateTime(2025, 1, 15);
+        repository.Donations[1].Date = new DateTime(2025, 2, 15);
+        var summary = Assert.Single(await CreateService(repository).GetDonorSummariesForSelectionAsync(
+            new AccountOptionDto { AccountId = 42, Fund = "Primary" }, "All", null));
+        Assert.Equal(DonorFrequency.OneTime, summary.Frequency);
+    }
+
+    [Fact]
+    public async Task All_MixedStillReportsMonthlyFundMissingGifts()
+    {
+        var repository = new DonationRepositoryStub();
+        repository.Donations.Clear();
+        Add("Primary", new DateTime(2025, 1, 15));
+        Add("Primary", new DateTime(2025, 2, 15));
+        Add("Primary", new DateTime(2025, 4, 15));
+        Add("Separate", new DateTime(2024, 3, 15));
+        Add("Separate", new DateTime(2025, 3, 15));
+
+        var summary = Assert.Single(await CreateService(repository).GetDonorSummariesForSelectionAsync(
+            new AccountOptionDto { AccountId = 42, Fund = "Primary" }, "All", null));
+        Assert.Equal(DonorFrequency.Mixed, summary.Frequency);
+        Assert.True(summary.HasMissingGiftAlert);
+        Assert.Single(summary.MissingMonths);
+
+        void Add(string fund, DateTime date) => repository.Donations.Add(new()
+        {
+            Id = repository.Donations.Count + 1, DonorId = 1, DonorDisplayName = "Synthetic donor",
+            AccountName = "Synthetic donor", Fund = fund, Date = date, Amount = 100
+        });
+    }
+
     [Fact]
     public async Task SharedDonorAcrossFundsIsOneRow_WhileSameNameDifferentIdsStaySeparate()
     {

@@ -19,12 +19,15 @@ CREATE TEMPORARY TABLE TempAffectedGroups
 (
     StageId BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     IdentityKey VARCHAR(512) COLLATE utf8mb4_bin NOT NULL,
-    Fund VARCHAR(255) NOT NULL
+    Fund VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+    ChangedFrom DATETIME NOT NULL
 ) ENGINE=InnoDB;
-INSERT INTO TempAffectedGroups (IdentityKey, Fund)
-SELECT DISTINCT donor.IdentityKey, donation.Fund FROM DonationData donation
-JOIN Donors donor ON donor.Id = donation.DonorId WHERE donation.Date >= @Boundary;
-INSERT INTO TempAffectedGroups (IdentityKey, Fund) SELECT DISTINCT IdentityKey, Fund FROM TempImportDonations;";
+INSERT INTO TempAffectedGroups (IdentityKey, Fund, ChangedFrom)
+SELECT donor.IdentityKey, UPPER(TRIM(donation.Fund)) COLLATE utf8mb4_bin, MIN(donation.Date) FROM DonationData donation
+JOIN Donors donor ON donor.Id = donation.DonorId WHERE donation.Date >= @Boundary
+GROUP BY donor.IdentityKey, UPPER(TRIM(donation.Fund)) COLLATE utf8mb4_bin;
+INSERT INTO TempAffectedGroups (IdentityKey, Fund, ChangedFrom)
+SELECT IdentityKey, UPPER(TRIM(Fund)) COLLATE utf8mb4_bin, MIN(Date) FROM TempImportDonations GROUP BY IdentityKey, UPPER(TRIM(Fund)) COLLATE utf8mb4_bin;";
         command.Parameters.AddWithValue("@Boundary", boundary);
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -140,52 +143,145 @@ FROM Donors donor JOIN (SELECT DISTINCT IdentityKey FROM TempAffectedGroups) aff
 
     private static async Task ReclassifyAffectedGroupsAsync(MySqlConnection connection, MySqlTransaction transaction, CancellationToken ct, Action<DonationPersistenceProgress> reportProgress)
     {
-        var rows = new List<(long Id, long DonorId, string Fund, DateTime Date, decimal Amount, int? Frequency)>();
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandText = @"SELECT donation.Id, donation.DonorId, donation.Fund, donation.Date, donation.Amount, donation.Frequency
-FROM DonationData donation JOIN Donors donor ON donor.Id = donation.DonorId
-JOIN (SELECT DISTINCT IdentityKey, Fund FROM TempAffectedGroups) affected
-ON affected.IdentityKey = donor.IdentityKey AND affected.Fund = donation.Fund ORDER BY donation.Date, donation.Id";
-            await using var reader = await command.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct)) rows.Add((reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
-                reader.GetDateTime(3), reader.GetDecimal(4), reader.IsDBNull(5) ? null : reader.GetInt32(5)));
-        }
-        var classifier = new DonorFrequencyService();
+        await ExecuteImportCommandAsync(connection, transaction, @"DROP TEMPORARY TABLE IF EXISTS TempFrequencyGroups;
+CREATE TEMPORARY TABLE TempFrequencyGroups
+(
+    StageId BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    DonorId BIGINT NOT NULL,
+    Fund VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
+    ChangedFrom DATETIME NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO TempFrequencyGroups (DonorId, Fund, ChangedFrom)
+SELECT donor.Id, affected.Fund, MIN(affected.ChangedFrom)
+FROM TempAffectedGroups affected JOIN Donors donor ON donor.IdentityKey = affected.IdentityKey
+GROUP BY donor.Id, affected.Fund;
+DROP TEMPORARY TABLE IF EXISTS TempImportFrequency;
+CREATE TEMPORARY TABLE TempImportFrequency (Id BIGINT PRIMARY KEY, Frequency TINYINT NOT NULL)", ct);
+
+        const int pageSize = 500;
         var changes = new List<(long Id, int Frequency)>();
         var classified = 0;
-        reportProgress(new("ImportFrequencyCalculation", 0, rows.Count));
-        foreach (var group in rows.GroupBy(row => (row.DonorId, Fund: row.Fund.Trim().ToUpperInvariant())))
+        long afterGroup = 0;
+        while (true)
         {
-            ct.ThrowIfCancellationRequested();
-            var history = group.Select(row => new DonorGiftRecord { Date = row.Date, Amount = row.Amount }).ToList();
-            foreach (var row in group)
+            var groups = new List<(long StageId, long DonorId, string Fund, DateTime ChangedFrom)>();
+            await using (var command = connection.CreateCommand())
             {
-                var frequency = (int)classifier.ClassifyGift(new DonorGiftRecord { Date = row.Date, Amount = row.Amount }, history).Frequency;
-                if (frequency != row.Frequency) changes.Add((row.Id, frequency));
+                command.Transaction = transaction;
+                command.CommandTimeout = ImportCommandTimeoutSeconds;
+                command.CommandText = "SELECT StageId, DonorId, Fund, ChangedFrom FROM TempFrequencyGroups WHERE StageId > @After ORDER BY StageId LIMIT 64";
+                command.Parameters.AddWithValue("@After", afterGroup);
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct)) groups.Add((reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetDateTime(3)));
+            }
+            if (groups.Count == 0) break;
+            foreach (var group in groups)
+            {
+                ct.ThrowIfCancellationRequested();
+                var anchor = await FindFrequencyAnchorAsync(connection, transaction, group.DonorId, group.Fund, group.ChangedFrom, ct);
+                var state = new DonorFrequencyService.FrequencySequence();
+                FrequencyHistoryRow? pending = null;
+                DateTime? afterDate = null;
+                long afterId = 0;
+                while (true)
+                {
+                    var page = new List<FrequencyHistoryRow>(pageSize);
+                    await using (var command = connection.CreateCommand())
+                    {
+                        command.Transaction = transaction;
+                        command.CommandTimeout = ImportCommandTimeoutSeconds;
+                        command.CommandText = @"SELECT Id, Date, Amount, Frequency FROM DonationData
+WHERE DonorId = @DonorId AND UPPER(TRIM(Fund)) COLLATE utf8mb4_bin = @Fund
+AND (@Start IS NULL OR Date >= @Start)
+AND (@After IS NULL OR Date > @After OR (Date = @After AND Id > @AfterId))
+ORDER BY Date, Id LIMIT 500";
+                        command.Parameters.AddWithValue("@DonorId", group.DonorId);
+                        command.Parameters.AddWithValue("@Fund", group.Fund);
+                        command.Parameters.AddWithValue("@Start", (object?)anchor?.Date.AddMonths(-12) ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@After", (object?)afterDate ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@AfterId", afterId);
+                        await using var reader = await command.ExecuteReaderAsync(ct);
+                        while (await reader.ReadAsync(ct)) page.Add(new(reader.GetInt64(0), reader.GetDateTime(1), reader.GetDecimal(2), reader.IsDBNull(3) ? null : reader.GetInt32(3)));
+                    }
+                    if (page.Count == 0) break;
+                    foreach (var row in page)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        state.Add(new DonorGiftRecord { Date = row.Date, Amount = row.Amount });
+                        if (pending is not null) await StageAsync(pending, (int)state.Previous);
+                        pending = row;
+                    }
+                    afterDate = page[^1].Date;
+                    afterId = page[^1].Id;
+                }
+                if (pending is not null) await StageAsync(pending, (int)state.Current);
                 classified++;
-                if (classified % 250 == 0 || classified == rows.Count)
-                    reportProgress(new("ImportFrequencyCalculation", classified, rows.Count));
+                reportProgress(new("ImportFrequencyCalculation", classified));
+                afterGroup = group.StageId;
+
+                async Task StageAsync(FrequencyHistoryRow row, int frequency)
+                {
+                    // Context is read-only; only the proven checkpoint and its suffix can change.
+                    if (anchor is not null && (row.Date < anchor.Value.Date || (row.Date == anchor.Value.Date && row.Id < anchor.Value.Id))) return;
+                    if (row.Frequency == frequency) return;
+                    changes.Add((row.Id, frequency));
+                    if (changes.Count == pageSize) await FlushAsync();
+                }
             }
         }
-        await ExecuteImportCommandAsync(connection, transaction, "DROP TEMPORARY TABLE IF EXISTS TempImportFrequency; CREATE TEMPORARY TABLE TempImportFrequency (Id BIGINT PRIMARY KEY, Frequency TINYINT NOT NULL)", ct);
+        await FlushAsync();
         reportProgress(new("ImportFrequencyWrites"));
-        foreach (var chunk in changes.Chunk(500))
+        await ExecuteImportCommandAsync(connection, transaction, @"UPDATE DonationData donation JOIN TempImportFrequency staged ON staged.Id = donation.Id
+SET donation.Frequency = staged.Frequency", ct);
+
+        async Task FlushAsync()
+        {
+            if (changes.Count == 0) return;
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandTimeout = ImportCommandTimeoutSeconds;
+            var values = new List<string>();
+            for (var index = 0; index < changes.Count; index++)
+            {
+                values.Add($"(@Id{index}, @Frequency{index})");
+                command.Parameters.AddWithValue($"@Id{index}", changes[index].Id);
+                command.Parameters.AddWithValue($"@Frequency{index}", changes[index].Frequency);
+            }
+            command.CommandText = "INSERT INTO TempImportFrequency VALUES " + string.Join(',', values);
+            if (await command.ExecuteNonQueryAsync(ct) != changes.Count)
+                throw new InvalidOperationException("Frequency staging count did not match the calculated updates.");
+            changes.Clear();
+        }
+    }
+
+    private sealed record FrequencyHistoryRow(long Id, DateTime Date, decimal Amount, int? Frequency);
+
+    private static async Task<(long Id, DateTime Date)?> FindFrequencyAnchorAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long donorId, string fund, DateTime changedFrom, CancellationToken ct)
+    {
+        // A consecutive-month pair proves Monthly without trusting persisted frequency or earlier pattern state.
+        // Replay includes the checkpoint's full twelve-month amount context before emitting any updates.
+        foreach (var months in new[] { 4, 13, 26 })
         {
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            var values = new List<string>();
-            for (var index = 0; index < chunk.Length; index++)
-            {
-                values.Add($"(@Id{index}, @Frequency{index})");
-                command.Parameters.AddWithValue($"@Id{index}", chunk[index].Id);
-                command.Parameters.AddWithValue($"@Frequency{index}", chunk[index].Frequency);
-            }
-            command.CommandText = "INSERT INTO TempImportFrequency VALUES " + string.Join(',', values);
-            await command.ExecuteNonQueryAsync(ct);
+            command.CommandTimeout = ImportCommandTimeoutSeconds;
+            command.CommandText = @"SELECT Id, Date FROM
+(
+    SELECT Id, Date, LAG(Date) OVER (ORDER BY Date, Id) AS PreviousDate
+    FROM DonationData WHERE DonorId = @DonorId AND UPPER(TRIM(Fund)) COLLATE utf8mb4_bin = @Fund
+    AND Date >= @Start AND Date < @ChangedFrom
+) history
+WHERE (YEAR(Date) * 12 + MONTH(Date)) - (YEAR(PreviousDate) * 12 + MONTH(PreviousDate)) = 1
+ORDER BY Date DESC, Id DESC LIMIT 1";
+            command.Parameters.AddWithValue("@DonorId", donorId);
+            command.Parameters.AddWithValue("@Fund", fund);
+            command.Parameters.AddWithValue("@Start", changedFrom.AddMonths(-months));
+            command.Parameters.AddWithValue("@ChangedFrom", changedFrom);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct)) return (reader.GetInt64(0), reader.GetDateTime(1));
         }
-        await ExecuteImportCommandAsync(connection, transaction, @"UPDATE DonationData donation JOIN TempImportFrequency staged ON staged.Id = donation.Id
-SET donation.Frequency = staged.Frequency", ct);
+        // No proven boundary: replay only this affected donor/fund from its beginning, still in bounded pages.
+        return null;
     }
 }

@@ -8,6 +8,25 @@ No upload limits, cache budgets, application behavior, or production GC settings
 
 Preserve existing uncommitted changes. Use synthetic data only. Do not start the application against its configured database, initialize a database, run Docker, or perform rollback/provider simulations without separate user direction. Those simulations remain reserved for the user.
 
+## Donation-frequency implementation and synthetic CPU comparison
+
+The agreed chronological gift-pattern and targeted publication completion is implemented; see `DONATION_FREQUENCY.md`. The implementation removes standard publication's all-affected history/change lists and repeated per-gift classification. It probes affected donor/fund prefixes for a proven Monthly checkpoint with full twelve-month context, or replays only the unresolved affected group from its beginning. Group/history/change buffers are bounded at 64/500/500 rows; the active group's rolling twelve-month gift queue remains density-dependent. Contact evidence projection and the incoming serialized evidence/write-model array were not redesigned.
+
+Saved `BenchmarkSuite3` artifacts were inspected first. Fresh before/after runs then used the same unchanged `DonationFrequencyBenchmarks.CurrentFrequency` and `LatestGift`, the same 60/240 monthly synthetic gifts, ShortRun configuration, and CPU profiler. Neither run accessed a database or started the configured application. The earlier saved artifact's different timings are not substituted for the freshly collected baseline.
+
+Each timing cell below is **mean / reported error / standard deviation**, in microseconds. Delta refers to mean time only; these short profiled runs have broad error estimates and are not production upload speedup claims.
+
+| Workload | Gifts | Before (mean / error / SD), us | After (mean / error / SD), us | Mean delta |
+| --- | ---: | ---: | ---: | ---: |
+| CurrentFrequency | 60 | 42.36 / 25.42 / 1.394 | 14.89 / 4.506 / 0.247 | -64.8% |
+| LatestGift | 60 | 42.83 / 41.20 / 2.258 | 18.40 / 18.661 / 1.023 | -57.0% |
+| CurrentFrequency | 240 | 193.53 / 116.55 / 6.388 | 68.81 / 14.338 / 0.786 | -64.4% |
+| LatestGift | 240 | 190.88 / 105.66 / 5.792 | 75.82 / 20.725 / 1.136 | -60.3% |
+
+Baseline CPU session: `9c848f08-ceb0-43b1-9acb-c6f924d72c5b`. Post-change CPU session: `7a4da543-67d5-45d3-8693-7afc6b9fda2d`. In the sampled process, `IsMonthly` had 60.42% self / 74.20% total CPU samples before and 21.81% self / 57.29% total afterward. These are sample shares within each trace, not independently measured elapsed method durations. Remaining samples include monthly-total enumeration and decimal arithmetic. No further speculative optimization was applied.
+
+This benchmark measures the real core classification entry points, not MySQL checkpoint query execution, publication phase latency, retained heap, live/peak RAM, working set, or provider/server buffers. No measured memory-retention saving is claimed. Seeded synthetic checkpoint/full-replay equivalence tests support the narrowed context design; provider query plans, cancellation/atomicity, backups/rollback, summary refresh, and normal UI/precaching acceptance remain user-run.
+
 ## Evidence available
 
 ### Operational observations supplied by the user

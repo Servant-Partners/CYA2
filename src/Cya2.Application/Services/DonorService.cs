@@ -684,18 +684,25 @@ namespace Cya2.Application.Services
                 var fixedPhones = JoinContactValues(donorRows.Select(x => x.PhoneFixed));
                 var phones = JoinContactValues(donorRows.SelectMany(x => new[] { x.PhoneMobile, x.PhoneFixed }));
 
-                // Build gift records for frequency classification.
-                var giftHistory = donorRows
-                    .Select(x => new DonorGiftRecord { Date = x.Date, Amount = Convert.ToDecimal(x.Amount) })
-                    .OrderBy(x => x.Date)
+                // Patterns belong to donor/fund histories; combined selections only roll up their labels.
+                var fundPatterns = donorRows
+                    .GroupBy(row => row.Fund.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .Select(fund =>
+                    {
+                        var rows = fund.OrderBy(row => row.Date).ThenBy(row => row.Id).ToList();
+                        var history = rows.Select(row => new DonorGiftRecord
+                        {
+                            Date = row.Date, Amount = Convert.ToDecimal(row.Amount)
+                        }).ToList();
+                        return new
+                        {
+                            History = history,
+                            Frequency = rows[^1].Frequency ?? _frequencyService.ClassifyDonor(history)
+                        };
+                    })
                     .ToList();
-
-                // Use stored frequency from most recent donation if available,
-                // otherwise fall back to live classification.
-                var mostRecent = donorRows.OrderByDescending(x => x.Date).First();
-                var frequency = donorRows.Select(row => row.Fund).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1
-                    ? _frequencyService.ClassifyDonor(giftHistory)
-                    : mostRecent.Frequency ?? _frequencyService.ClassifyDonor(giftHistory);
+                var frequencies = fundPatterns.Select(pattern => pattern.Frequency).Distinct().ToList();
+                var frequency = frequencies.Count == 1 ? frequencies[0] : DonorFrequency.Mixed;
 
                 var hasDirect = identities.Any(i => i.IsDirect);
                 var sourceOrganizations = identities
@@ -708,10 +715,11 @@ namespace Cya2.Application.Services
                 var sourceSummary = BuildSourceSummary(hasDirect, sourceOrganizations);
                 var donorDisplayName = identities.First().DisplayName;
 
-                // Detect missing gift alerts for monthly donors.
-                var missingAlerts = frequency == DonorFrequency.Monthly
-                    ? _missingGiftService.GetMissingGiftAlerts(donorDisplayName, giftHistory, dataFreshThrough)
-                    : new List<Cya2.Core.Services.MissingGiftAlert>();
+                // A Mixed label must not hide a monthly fund's warning or let another fund cover it.
+                var missingAlerts = fundPatterns.Where(pattern => pattern.Frequency == DonorFrequency.Monthly)
+                    .SelectMany(pattern => _missingGiftService.GetMissingGiftAlerts(donorDisplayName, pattern.History, dataFreshThrough))
+                    .OrderBy(alert => alert.ExpectedMonth)
+                    .ToList();
 
                 yield return new DonorSummaryDto
                 {
@@ -730,7 +738,7 @@ namespace Cya2.Application.Services
                     Country = mostRecentWithAddress?.Country ?? string.Empty,
                     Frequency = frequency,
                     HasMissingGiftAlert = missingAlerts.Count > 0,
-                    MissingMonths = missingAlerts.Select(a => a.ExpectedMonthLabel).ToList()
+                    MissingMonths = missingAlerts.Select(a => a.ExpectedMonthLabel).Distinct().ToList()
                 };
             }
         }

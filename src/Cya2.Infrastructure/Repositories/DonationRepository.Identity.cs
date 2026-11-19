@@ -28,13 +28,16 @@ public sealed partial class DonationRepository
         var classifier = new DonorFrequencyService();
         foreach (var group in records.GroupBy(row => (row.DonorId, Fund: row.Fund.Trim().ToUpperInvariant())))
         {
-            var history = group.Select(row => new DonorGiftRecord { Date = row.Date, Amount = row.Amount }).ToList();
-            foreach (var row in group)
+            var rows = group.ToArray();
+            var history = rows.Select(row => new DonorGiftRecord { Date = row.Date, Amount = row.Amount }).ToArray();
+            var frequencies = classifier.ClassifySequence(history);
+            for (var index = 0; index < rows.Length; index++)
             {
+                var row = rows[index];
                 await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
                 command.CommandText = "UPDATE DonationData SET Frequency = @Frequency WHERE Id = @Id";
-                command.Parameters.AddWithValue("@Frequency", (int)classifier.ClassifyGift(new DonorGiftRecord { Date = row.Date, Amount = row.Amount }, history).Frequency);
+                command.Parameters.AddWithValue("@Frequency", (int)frequencies[index]);
                 command.Parameters.AddWithValue("@Id", row.Id);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }

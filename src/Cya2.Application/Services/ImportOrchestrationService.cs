@@ -102,6 +102,7 @@ public sealed class ImportOrchestrationService : IImportOrchestrationService
             FileName = fileName ?? string.Empty,
             FileSizeBytes = data.Length,
             ContentType = contentType ?? string.Empty,
+            SourceRowCount = semantic?.SourceRowCount,
             CanonicalDonationCount = semantic?.Donations.Length,
             DuplicateRowsMerged = semantic?.DuplicateRowsMerged ?? 0,
             MinimumDonationDate = semantic?.MinimumDate,

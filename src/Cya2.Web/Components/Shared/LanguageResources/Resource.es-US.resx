@@ -1106,9 +1106,10 @@
   </data>
   <data name="ImportCancelRequested" xml:space="preserve"><value>Cancelación solicitada</value></data>
   <data name="ImportCancelUnavailable" xml:space="preserve"><value>La cancelación no está disponible. Es posible que la importación ya haya finalizado. Cerrar este diálogo no cancela la importación.</value></data>
-  <data name="DonationReplacementBoundary" xml:space="preserve"><value>Reemplazo de donaciones: {0} y todas las fechas posteriores, sin límite de fecha superior.</value></data>
-  <data name="DonationPreviewCounts" xml:space="preserve"><value>Donaciones: {0}; filas duplicadas consolidadas: {1}.</value></data>
-  <data name="DonationUnresolvedCounts" xml:space="preserve"><value>Donaciones sin cuenta asociada: {0} normales; {1} de pasantes.</value></data>
-  <data name="DonationMappingPreviewNotice" xml:space="preserve"><value>Los recuentos reflejan la configuración actual y pueden cambiar antes de la importación. Las asociaciones ausentes o en conflicto no impiden la carga; las donaciones permanecen guardadas pero no están disponibles en las vistas de cuentas hasta que se configuren de forma única.</value></data>
+  <data name="FirstDonation" xml:space="preserve"><value>Primera donación:</value></data>
+  <data name="NumberOfRows" xml:space="preserve"><value>Número de filas:</value></data>
+  <data name="NumberOfDuplicateRowsRemoved" xml:space="preserve"><value>Número de filas duplicadas eliminadas:</value></data>
+  <data name="TotalNumberOfDonations" xml:space="preserve"><value>Número total de donaciones:</value></data>
   <data name="DonationOldDateConsent" xml:space="preserve"><value>Entiendo que esta fecha tiene más de 380 días y se reemplazarán todas las donaciones en esa fecha o después.</value></data>
+  <data name="PreparingUploadPreview" xml:space="preserve"><value>Subiendo archivo.</value></data>
 </root>
