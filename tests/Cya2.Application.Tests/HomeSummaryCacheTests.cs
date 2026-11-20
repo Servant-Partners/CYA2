@@ -3,8 +3,10 @@ using Cya2.Application.Interfaces;
 using Cya2.Application.Models;
 using Cya2.Application.Services;
 using Cya2.Core.Entities;
+using Cya2.Core.Interfaces;
 using Cya2.Core.ReadModels;
 using Cya2.Core.Services;
+using Cya2.Core.ValueObjects;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -12,6 +14,135 @@ namespace Cya2.Application.Tests;
 
 public sealed class HomeSummaryCacheTests
 {
+    [Theory]
+    [InlineData(false, 1000)]
+    [InlineData(true, 1000)]
+    [InlineData(false, -1000)]
+    [InlineData(true, -1000)]
+    public async Task StandardSummary_PreservesHistoricalBalancesAndInvalidates(bool warm, double historicalAmount)
+    {
+        var now = DateTime.Now;
+        var priorYearStart = new DateTime(now.Year - 1, 1, 1);
+        var account = new UserAccountContextAccount { AccountId = 1, Fund = "General", AccountingClass = "Class", AccountNumber = "100", BalanceAdjustment = 50m };
+        var rows = CreateAccountingHistory(now, historicalAmount);
+        var loader = new AccountingLoader(rows);
+        var versions = new CacheInvalidationVersion();
+        var service = CreateStandardDashboard(account, loader, versions, new Facts(rows));
+        if (warm)
+        {
+            await service.WarmHomeSummaryFromDataAsync(
+                new Account { AccountId = 1, Fund = "General", AccountingClass = "Class", AccountNumber = "100", BalanceAdjustment = 50m },
+                new CacheRebuildData { AccountingByAccountId = new Dictionary<int, List<AccountingRecord>> { [1] = rows } });
+        }
+
+        var dashboard = await service.GetDashboardSummaryDataAsync(account.Fund, "1");
+
+        var openingBalance = 50m + (decimal)historicalAmount - 200m;
+        Assert.True(dashboard.HasAccountData);
+        Assert.Equal(openingBalance, dashboard.PriorYear.StartingBalance);
+        Assert.Equal(openingBalance + 80m, dashboard.PriorYear.Balance);
+        Assert.Equal(dashboard.PriorYear.Balance, dashboard.CurrentYear.StartingBalance);
+        Assert.Equal(openingBalance + 10m, dashboard.CurrentYear.Balance);
+        var processor = new AccountingTransactionProcessor(new ExpenseClassificationService());
+        var currentMonthStart = new DateTime(now.Year, now.Month, 1);
+        Assert.Equal(processor.Process(account, rows, null, currentMonthStart.AddDays(-1)).TotalBalance, dashboard.CurrentMonth.StartingBalance);
+        Assert.Equal(processor.Process(account, rows, null, currentMonthStart.AddDays(-1)).TotalBalance, dashboard.PriorMonth.Balance);
+        Assert.Equal(20m, dashboard.PriorYear.TotalExpenses);
+        Assert.Equal(40m, dashboard.CurrentYear.TotalExpenses);
+        Assert.Equal(-30m, dashboard.CurrentYear.InternalTransfers);
+
+        var loads = loader.Calls;
+        await service.GetDashboardSummaryDataAsync(account.Fund, "1");
+        Assert.Equal(loads, loader.Calls);
+        if (!warm)
+            Assert.Contains(loader.Ranges, range => range.StartDate < priorYearStart.AddYears(-1));
+
+        rows[0].Amount += 500;
+        versions.Invalidate(CacheDataDomains.Accounting);
+        var refreshed = await service.GetDashboardSummaryDataAsync(account.Fund, "1");
+        Assert.Equal(openingBalance + 500m, refreshed.PriorYear.StartingBalance);
+        Assert.Equal(openingBalance + 510m, refreshed.CurrentYear.Balance);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CustomSummary_ReusesMatchingHomeAnchorInEitherDirection(bool beforeAnchor)
+    {
+        var now = DateTime.Now;
+        var rows = CreateAccountingHistory(now, 1000);
+        var facts = new Facts(rows);
+        var account = new UserAccountContextAccount { AccountId = 1, Fund = "General", AccountingClass = "Class", AccountNumber = "100", BalanceAdjustment = 50m };
+        var service = CreateStandardDashboard(account, new AccountingLoader(rows), new CacheInvalidationVersion(), facts);
+        await service.GetDashboardSummaryDataAsync(account.Fund, "1");
+        var start = beforeAnchor ? new DateTime(now.Year - 3, 1, 1) : new DateTime(now.Year - 1, 1, 1);
+        var end = beforeAnchor ? new DateTime(now.Year - 2, 1, 1) : new DateTime(now.Year - 1, 12, 31);
+
+        var custom = await service.GetCustomSummaryAsync(account.Fund, start, end, "1");
+
+        var processor = new AccountingTransactionProcessor(new ExpenseClassificationService());
+        Assert.Equal(processor.Process(account, rows, null, start.AddDays(-1)).TotalBalance, custom.StartingBalance);
+        Assert.Equal(processor.Process(account, rows, null, end).TotalBalance, custom.Balance);
+        Assert.DoesNotContain(facts.AccountingRanges, range => range.StartDate == DateTime.MinValue);
+    }
+
+    private static List<AccountingRecord> CreateAccountingHistory(DateTime now, double historicalAmount) =>
+    [
+        new() { Id = 1, AccountingClass = "Class", Date = new DateTime(now.Year - 3, 6, 1), Amount = historicalAmount, Account = "Income" },
+        new() { Id = 2, AccountNumber = "100", Date = new DateTime(now.Year - 2, 12, 31), Amount = 200, Type = "Expense" },
+        new() { Id = 3, AccountingClass = "Class", Date = new DateTime(now.Year - 2, 12, 31), Amount = 9999, Account = "Prepaids" },
+        new() { Id = 4, AccountingClass = "Other", Date = new DateTime(now.Year - 2, 12, 31), Amount = 9999, Account = "Income" },
+        new() { Id = 5, AccountingClass = "Class", Date = new DateTime(now.Year - 1, 1, 1), Amount = 100, Account = "Income" },
+        new() { Id = 6, AccountingClass = "Class", Date = new DateTime(now.Year - 1, 12, 31), Amount = 20, Type = "Expense" },
+        new() { Id = 7, AccountingClass = "Class", Date = new DateTime(now.Year, 1, 1), Amount = -30, Account = "Transfer" },
+        new() { Id = 8, AccountingClass = "Class", Date = now.Date, Amount = 40, Type = "Expense" }
+    ];
+
+    private static FinancialDashboardService CreateStandardDashboard(UserAccountContextAccount account, AccountingLoader loader,
+        CacheInvalidationVersion versions, Facts facts)
+    {
+        var classification = new ExpenseClassificationService();
+        var calculations = new AccountCalculationService(classification, new AccountingTransactionProcessor(classification), facts);
+        return new FinancialDashboardService(NullLogger<FinancialDashboardService>.Instance,
+            calculations, new ReverseBalanceCalculationService(classification),
+            new DonationDataCache(NullLogger<DonationDataCache>.Instance), new EmptyDonationLoader(),
+            new AccountingDataCache(NullLogger<AccountingDataCache>.Instance), loader,
+            new DashboardContext(account), null!, new AllowDashboardAccess(), new AccountBalanceCache(), versions,
+            new HomeSummaryCache(NullLogger<HomeSummaryCache>.Instance), facts);
+    }
+
+    private sealed class AccountingLoader(List<AccountingRecord> rows) : IAccountingDataCacheLoader
+    {
+        public int Calls { get; private set; }
+        public List<DateRange> Ranges { get; } = [];
+        public Task<AccountingDataCacheEntry> LoadAsync(UserAccountContextAccount account, DateRange queryRange, AccountingDataCacheKey key, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            Ranges.Add(queryRange);
+            return Task.FromResult(new AccountingDataCacheEntry(key,
+                rows.Where(row => queryRange.Contains(row.Date)).Select(row => new AccountingCacheRecord(row.Id, row.Date, row.Num, row.Amount, row.Account, row.Type, row.AccountingClass, row.AccountNumber)), DateTime.UtcNow));
+        }
+    }
+
+    private sealed class EmptyDonationLoader : IDonationDataCacheLoader
+    {
+        public Task<DonationDataCacheEntry> LoadAsync(UserAccountContextAccount account, DateRange queryRange, DonationDataCacheKey key, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new DonationDataCacheEntry(key, [], [], DateTime.UtcNow));
+    }
+
+    private sealed class Facts(List<AccountingRecord> rows) : IAccountFactDataService
+    {
+        public List<DateRange> AccountingRanges { get; } = [];
+        public Task<DonationCalculationData> GetDonationDataAsync(UserAccountContextAccount account, string userId, DateTime startDate, DateTime endDate, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new DonationCalculationData());
+        public Task<List<AccountingRecord>> GetAccountingDataAsync(UserAccountContextAccount account, string userId, DateTime startDate, DateTime endDate, CancellationToken cancellationToken = default)
+        {
+            var range = new DateRange(startDate, endDate);
+            AccountingRanges.Add(range);
+            return Task.FromResult(rows.Where(row => range.Contains(row.Date)).ToList());
+        }
+    }
+
     [Fact]
     public async Task WarmedInternSummary_IsReusedByDashboardWithAccountOverheadAndGeneration()
     {
@@ -113,7 +244,7 @@ public sealed class HomeSummaryCacheTests
     private sealed class DashboardContext(UserAccountContextAccount account) : IUserAccountContextService
     {
         public Task<UserAccountContext?> GetContextAsync(string userId, bool isAdminOrViewerHint = false) =>
-            Task.FromResult<UserAccountContext?>(new UserAccountContext { IsIntern = true, InternName = account.InternName, Accounts = [account] });
+            Task.FromResult<UserAccountContext?>(new UserAccountContext { IsIntern = !string.IsNullOrWhiteSpace(account.InternName), InternName = account.InternName, Accounts = [account] });
         public UserAccountContextAccount? ResolveSelectedAccount(UserAccountContext context, string? preferredIdentity) => account;
         public void Invalidate(string userId) { }
     }

@@ -29,7 +29,10 @@ public sealed class CacheRebuildInternIsolationTests
         shared.SetAccounts(versions.Current, accounts);
         shared.SetSubAccounts(versions.Current, []);
         var donations = new DonationReader();
-        var accounting = new AccountingReader();
+        var accounting = new AccountingReader
+        {
+            Rows = [new AccountingRecord { AccountNumber = "100", Date = DateTime.Today.AddYears(-3), Amount = 500, Account = "Income" }]
+        };
         var classification = new ExpenseClassificationService();
         var calculation = new AccountCalculationService(classification, new AccountingTransactionProcessor(classification), null!);
         var preload = new AdminPreloadService(null!, null!, calculation, shared, null!, new AccountBalanceCache(),
@@ -39,6 +42,8 @@ public sealed class CacheRebuildInternIsolationTests
 
         Assert.Equal(new[] { 1 }, donations.NormalAccountIds);
         Assert.Equal(new[] { 1 }, accounting.AccountIds);
+        Assert.Equal(DateTime.MinValue, accounting.StartDate);
+        Assert.Equal(500m, overview.Single(row => row.Fund == "General").CurrentBalance);
         Assert.Equal(10m, overview.Single(row => row.Fund == "Intern: Jane Doe").Last12MonthsDonations);
         Assert.Equal(20m, overview.Single(row => row.Fund == "Intern: John Doe").Last12MonthsDonations);
     }
@@ -66,6 +71,7 @@ public sealed class CacheRebuildInternIsolationTests
         Assert.Equal(new[] { 1 }, donations.NormalAccountIds);
         Assert.Equal(new[] { 1 }, accounting.AccountIds);
         Assert.Equal(new[] { "Jane Doe", "John Doe" }, donations.InternNames.Order(StringComparer.Ordinal));
+        Assert.Equal(DateTime.MinValue, accounting.StartDate);
         Assert.True(donations.InternStart <= DateTime.UtcNow.Date.AddMonths(-12));
         Assert.Equal(new DateTime(DateTime.Now.Year, 12, 31), donations.InternEnd);
         Assert.Equal(3, preload.Data!.Accounts.Count);
@@ -145,8 +151,16 @@ public sealed class CacheRebuildInternIsolationTests
     private sealed class AccountingReader : IExpenseReadRepository
     {
         public int[] AccountIds { get; private set; } = [];
+        public DateTime StartDate { get; private set; }
+        public List<AccountingRecord> Rows { get; init; } = [];
         public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string AccountingClass, string AccountNumber)> accounts, DateTime start, DateTime end)
-        { AccountIds = accounts.Select(a => a.AccountId).ToArray(); return Task.FromResult<IReadOnlyDictionary<int, List<AccountingRecord>>>(new Dictionary<int, List<AccountingRecord>>()); }
+        {
+            AccountIds = accounts.Select(a => a.AccountId).ToArray();
+            StartDate = start;
+            return Task.FromResult<IReadOnlyDictionary<int, List<AccountingRecord>>>(accounts.ToDictionary(account => account.AccountId,
+                account => Rows.Where(row => row.Date >= start && row.Date <= end &&
+                    (row.AccountNumber == account.AccountNumber || row.AccountingClass == account.AccountingClass)).ToList()));
+        }
         public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string accountingClass, string accountNumber, DateTime start, DateTime end) => throw new NotImplementedException();
     }
 

@@ -328,7 +328,7 @@ public sealed class AdminPreloadService : IAdminPreloadService
         var accountingTask = _expenseReadRepository.GetAccountingDataForAccountsAsync(
             accounts.Where(account => !InternAccountUtility.IsInternFund(account.Fund))
                 .Select(account => (account.AccountId, account.AccountingClass, account.AccountNumber)).ToList(),
-            trailingStart,
+            DateTime.MinValue,
             trailingEnd);
         await Task.WhenAll(donationTask, internDonationTask, accountingTask);
 

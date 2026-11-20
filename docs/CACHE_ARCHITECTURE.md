@@ -306,7 +306,11 @@ Do not require the selected UI range to equal a special canonical range before u
 
 ## Historical balance anchors
 
+Home's four-period summary and Accounts Overview cumulative balances require accounting history from the beginning of the ledger, not just the donation/reporting window. Central rebuild and the overview fallback bulk-load accounting from `DateTime.MinValue` through their reporting end date, including rebuilds that do not warm Home summaries. A cold Home summary load reads the same full accounting history through its summary end date directly via the accounting loader. These historical rows are transient calculation inputs: only the resulting presentation DTOs and numeric as-of balances are retained, and lifetime rows are not inserted into or substituted for the bounded shared accounting fact cache. Donation reporting windows and the overview's special trailing-period range remain unchanged. `BalanceAdjustment` is added once to the signed cumulative accounting total.
+
 Home summary balances use the existing inclusive, end-of-day balance convention. When a generation-matched Home summary is cached, the prior-year summary starting balance is used as the earliest end-of-day anchor (the day before the prior-year period begins). The anchor balance is then moved forward or backward using the existing accounting classification and signed-transaction rules; `BalanceAdjustment` is not applied a second time. If no cached anchor exists, the existing forward calculation path remains the fallback.
+
+Anchor lookup and summary creation share the same account identity, calendar year/month, and domain-generation key (Donations + Accounting + AccountMetadata for normal accounts; Donations + AccountMetadata for interns). The global invalidation counter used by the numeric balance cache is not a Home summary generation. This prevents a generation-key mismatch from bypassing the historical anchor on custom-range reads. Intern summary balances remain donation-only and do not load accounting history.
 
 ## Page usage guidance
 

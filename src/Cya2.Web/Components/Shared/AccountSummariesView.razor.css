@@ -1,0 +1,32 @@
+.account-summaries-dialog-root {
+    gap: 0.25rem !important;
+    overflow: visible !important;
+    padding: 0.25rem !important;
+}
+
+.account-summaries-dialog-root ::deep .home-summary-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    gap: 0.5rem !important;
+    margin-top: 0.25rem !important;
+}
+
+.account-summaries-dialog-root ::deep .home-custom-summary-column {
+    padding-right: 0.25rem !important;
+}
+
+.account-summaries-dialog-root ::deep .home-fixed-summary-grid {
+    gap: 0.35rem !important;
+}
+
+.account-summaries-dialog-root ::deep .home-fixed-summary-grid .rz-card {
+    padding: 0.35rem !important;
+}
+
+.account-summaries-dialog-root ::deep .home-fixed-summary-grid .rz-card hr {
+    margin-block: 0.1rem !important;
+}
+
+.account-summaries-dialog-root ::deep .home-fixed-summary-grid .rz-card .rz-text {
+    font-size: 0.9rem;
+    line-height: 1.05;
+}

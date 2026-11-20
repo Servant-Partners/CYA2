@@ -44,7 +44,6 @@
     {
         <RadzenCard Class="accounts-overview-loading">
             <PageLoadingIndicator IsLoading="true" LoadingText="@loadingText" />
-            <div class="text-muted accounts-overview-loading-text">@loadingText</div>
         </RadzenCard>
     }
     else
@@ -66,7 +65,11 @@
                 }
                 else
                 {
-                    <RadzenDataGridColumn TItem="FundBalanceRow" Property="Last12MonthsDonations" Title="@Localizer["TotalDonationsLTM"]" FormatString="{0:C2}" TextAlign="TextAlign.Right" />
+                    <RadzenDataGridColumn TItem="FundBalanceRow" Property="Last12MonthsDonations" Title="@Localizer["TotalDonationsLastTwelveMonths"]" FormatString="{0:C2}" TextAlign="TextAlign.Right">
+                        <HeaderTemplate>
+                            <span>@Localizer["TotalDonations"] (<span title="@Localizer["LastTwelveMonths"]">LTM</span>)</span>
+                        </HeaderTemplate>
+                    </RadzenDataGridColumn>
                 }
             </Columns>
         </RadzenDataGrid>
@@ -115,10 +118,6 @@
         align-items: center;
         justify-content: center;
         gap: 0.5rem;
-    }
-
-    .accounts-overview-loading-text {
-        text-align: center;
     }
 
     @@media (max-width: 768px) {

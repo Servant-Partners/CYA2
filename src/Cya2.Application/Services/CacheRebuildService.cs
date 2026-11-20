@@ -67,7 +67,7 @@ public sealed class CacheRebuildService : ICacheRebuildService
         var internDonationTask = _donationReadRepository.GetInternDonationsByNamesAndDateRangeAsync(internNames, rebuildStart, internEnd);
         var accountingTask = _expenseReadRepository.GetAccountingDataForAccountsAsync(
             standardAccounts.Select(account => (account.AccountId, account.AccountingClass, account.AccountNumber)).ToList(),
-            rebuildStart,
+            DateTime.MinValue,
             rebuildEnd);
         _logger.LogInformation(
             "Central cache rebuild financial loads started: normalDonationTask={NormalDonationTask}, internDonationTask={InternDonationTask}, accountingTask={AccountingTask}",

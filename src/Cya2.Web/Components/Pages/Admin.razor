@@ -2231,9 +2231,11 @@
         {
             _logger.LogInformation("Admin dialog button clicked: dialog={Dialog}", "AccountSummaries");
             _logger.LogInformation("Admin dialog opening: dialog={Dialog}", "AccountSummaries");
+            var options = BuildAdminDialogOptions(width: "90vw", height: "auto", resizable: true, showClose: true);
+            options.Style = "max-width:96vw; max-height:96vh;";
             await DialogService.OpenAsync<AccountSummariesView>(
                 title: Localizer["AccountSummaries"],
-                options: BuildAdminDialogOptions(width: "90vw", height: "auto", resizable: true, showClose: true));
+                options: options);
         }
 
         private async Task OpenFundReferencesDialog()
