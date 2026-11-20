@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authorization;
@@ -83,7 +84,7 @@ public static class WebEndpointExtensions
             }
 
             var returnUrl = ctx.Request.Query["returnUrl"].ToString();
-            if (string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith('/') || returnUrl.StartsWith("//"))
+            if (!RedirectHttpResult.IsLocalUrl(returnUrl))
             {
                 returnUrl = "/";
             }
@@ -105,19 +106,18 @@ public static class WebEndpointExtensions
         {
             await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             var returnUrl = ctx.Request.Query["returnUrl"].ToString();
-            if (string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith('/') || returnUrl.StartsWith("//"))
+            if (!RedirectHttpResult.IsLocalUrl(returnUrl))
             {
                 returnUrl = "/logged-out";
             }
 
-            ctx.Response.Redirect(returnUrl);
+            return Results.LocalRedirect(returnUrl);
         }).RequireAuthorization().RequireRateLimiting("AuthPolicy");
 
         endpoints.MapGet("/api/antiforgery-token", (HttpContext ctx, IAntiforgery antiforgery, ILogger<Program> logger) =>
         {
             var tokens = antiforgery.GetAndStoreTokens(ctx);
-            logger.LogDebug("Issued antiforgery token for {Path}. TraceId={TraceId}, UserAuthenticated={IsAuthenticated}",
-                ctx.Request.Path,
+            logger.LogDebug("Issued antiforgery token. TraceId={TraceId}, UserAuthenticated={IsAuthenticated}",
                 ctx.TraceIdentifier,
                 ctx.User?.Identity?.IsAuthenticated == true);
             return Results.Ok(new { requestToken = tokens.RequestToken });

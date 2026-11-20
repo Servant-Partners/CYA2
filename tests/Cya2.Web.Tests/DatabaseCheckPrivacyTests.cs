@@ -9,6 +9,30 @@ namespace Cya2.Web.Tests;
 
 public sealed class DatabaseCheckPrivacyTests
 {
+    [Theory]
+    [InlineData("/api/login/private-path\r\nForged log entry", "Database unavailable for authentication request - redirecting to error page")]
+    [InlineData("/signin-google/private-path\r\nForged log entry", "Database unavailable for authentication request - redirecting to error page")]
+    [InlineData("/donors/private-path\r\nForged log entry", "Database unavailable - redirecting to error page")]
+    public async Task DatabaseUnavailable_DoesNotLogRequestPathAndRedirects(string path, string expectedMessage)
+    {
+        var logger = new RecordingLogger<DatabaseCheckMiddleware>();
+        var nextCalled = false;
+        var middleware = new DatabaseCheckMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        }, logger, new ConfigurationBuilder().Build(), new DisconnectedMonitor());
+        var context = new DefaultHttpContext();
+        context.Request.Path = path;
+
+        await middleware.InvokeAsync(context);
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status302Found, context.Response.StatusCode);
+        Assert.Equal("/database-error", context.Response.Headers.Location.ToString());
+        Assert.Equal(expectedMessage, Assert.Single(logger.Entries));
+    }
+
     [Fact]
     public async Task AuthDatabaseFailure_LogsSafeMetadataAndRedirects()
     {
@@ -28,6 +52,19 @@ public sealed class DatabaseCheckPrivacyTests
         Assert.DoesNotContain(sentinel, log);
         Assert.Contains("InvalidOperationException", log);
         Assert.Contains("test-trace", log);
+    }
+
+    private sealed class DisconnectedMonitor : IDatabaseAvailabilityMonitor
+    {
+        public bool IsConnected => false;
+        public string LastError => string.Empty;
+        public bool BypassMonitoring => false;
+        public bool AllowMySqlOperations => false;
+        public event EventHandler<bool>? ConnectionStatusChanged { add { } remove { } }
+        public void Suspend() { }
+        public void Resume() { }
+        public void SetBypassMonitoring(bool bypass) { }
+        public void MarkAsDisconnected(string reason) { }
     }
 
     private sealed class ThrowingMonitor(string message) : IDatabaseAvailabilityMonitor

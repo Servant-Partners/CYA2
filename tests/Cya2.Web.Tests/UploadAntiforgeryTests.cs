@@ -5,6 +5,7 @@ using cya2.Controllers;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -21,7 +22,11 @@ public sealed class UploadAntiforgeryTests
     public async Task MissingToken_IsRejectedBeforeImportService(string endpoint)
     {
         var imports = new RecordingImportOrchestrationService();
-        var controller = CreateController(imports, new FakeAntiforgery { IsValid = false });
+        var logger = new RecordingLogger();
+        var controller = CreateController(imports, new FakeAntiforgery { IsValid = false }, logger);
+        var path = $"/api/upload/{endpoint}/private-path\r\nForged log entry";
+        controller.Request.Path = path;
+        controller.HttpContext.TraceIdentifier = "test-trace";
 
         IActionResult? result = endpoint.EndsWith("preview", StringComparison.Ordinal)
             ? (await InvokePreviewAsync(controller, endpoint)).Result
@@ -31,6 +36,9 @@ public sealed class UploadAntiforgeryTests
         Assert.Equal("Antiforgery validation failed.", badRequest.Value);
         Assert.Equal(0, imports.PreviewCalls);
         Assert.Equal(0, imports.ImportCalls);
+        Assert.Equal("Antiforgery validation failed for upload endpoint. TraceId=test-trace, HasHeaderToken=False, HasFormToken=False",
+            Assert.Single(logger.Messages));
+        Assert.DoesNotContain(logger.Values, value => value is string text && text.Contains(path, StringComparison.Ordinal));
     }
 
     [Theory]
@@ -51,13 +59,37 @@ public sealed class UploadAntiforgeryTests
         Assert.NotEqual(400, result is ObjectResult objectResult ? objectResult.StatusCode : null);
     }
 
+    [Theory]
+    [InlineData("donations", "preview-1", "Donation import confirmation requested.")]
+    [InlineData("donations", "preview-1\r\nForged log entry", "Donation import confirmation requested.")]
+    [InlineData("accounting", "preview-1", "Accounting import confirmation requested.")]
+    [InlineData("accounting", "preview-1\r\nForged log entry", "Accounting import confirmation requested.")]
+    public async Task Confirmation_DoesNotLogPreviewId(string importType, string previewId, string expectedMessage)
+    {
+        var imports = new RecordingImportOrchestrationService();
+        var logger = new RecordingLogger();
+        var controller = CreateController(imports, new FakeAntiforgery { IsValid = true }, logger);
+
+        var request = new ConfirmImportRequest { PreviewId = previewId };
+        var result = importType == "donations"
+            ? await controller.ConfirmDonations(request, CancellationToken.None)
+            : await controller.ConfirmAccounting(request, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        Assert.Equal(1, imports.ImportCalls);
+        Assert.Equal(previewId, imports.LastPreviewId);
+        Assert.Equal(expectedMessage, Assert.Single(logger.Messages));
+        Assert.DoesNotContain(logger.Values, value => value is string text && text.Contains(previewId, StringComparison.Ordinal));
+    }
+
     private static UploadController CreateController(
         RecordingImportOrchestrationService imports,
-        FakeAntiforgery antiforgery)
+        FakeAntiforgery antiforgery,
+        ILogger<UploadController>? logger = null)
     {
         var controller = new UploadController(
             imports,
-            NullLogger<UploadController>.Instance,
+            logger ?? NullLogger<UploadController>.Instance,
             Options.Create(new ImportUploadOptions()),
             antiforgery);
         var httpContext = new DefaultHttpContext
@@ -117,10 +149,27 @@ public sealed class UploadAntiforgeryTests
             => IsValid ? Task.CompletedTask : Task.FromException(new AntiforgeryValidationException("invalid"));
     }
 
+    private sealed class RecordingLogger : ILogger<UploadController>
+    {
+        public List<string> Messages { get; } = [];
+        public List<object?> Values { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+            if (state is IEnumerable<KeyValuePair<string, object?>> properties)
+                Values.AddRange(properties.Select(property => property.Value));
+        }
+    }
+
     private sealed class RecordingImportOrchestrationService : IImportOrchestrationService
     {
         public int PreviewCalls { get; private set; }
         public int ImportCalls { get; private set; }
+        public string? LastPreviewId { get; private set; }
 
         public Task<FilePreviewResult> PreviewAsync(Stream file, string importType, string fileName, string contentType, CancellationToken cancellationToken = default)
         {
@@ -131,6 +180,7 @@ public sealed class UploadAntiforgeryTests
         public Task<ImportResult> ImportFromPreviewAsync(string previewId, string importType, CancellationToken cancellationToken = default)
         {
             ImportCalls++;
+            LastPreviewId = previewId;
             return Task.FromResult(new ImportResult { ProgressId = "progress-1" });
         }
 

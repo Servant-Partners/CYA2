@@ -80,7 +80,7 @@ namespace cya2.Controllers
                 return BadRequest("PreviewId is required");
             }
 
-            _logger.LogInformation("Confirming donation import for preview {PreviewId}", request.PreviewId);
+            _logger.LogInformation("Donation import confirmation requested.");
             try
             {
                 var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "donations", request.OldDateAcknowledged, ct);
@@ -144,7 +144,7 @@ namespace cya2.Controllers
                 return BadRequest("PreviewId is required");
             }
 
-            _logger.LogInformation("Confirming accounting import for preview {PreviewId}", request.PreviewId);
+            _logger.LogInformation("Accounting import confirmation requested.");
             try
             {
                 var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "accounting", ct);
@@ -166,8 +166,7 @@ namespace cya2.Controllers
             catch (AntiforgeryValidationException)
             {
                 _logger.LogWarning(
-                    "Antiforgery validation failed for upload endpoint {Path}. TraceId={TraceId}, HasHeaderToken={HasHeaderToken}, HasFormToken={HasFormToken}",
-                    Request.Path,
+                    "Antiforgery validation failed for upload endpoint. TraceId={TraceId}, HasHeaderToken={HasHeaderToken}, HasFormToken={HasFormToken}",
                     HttpContext.TraceIdentifier,
                     Request.Headers.ContainsKey("RequestVerificationToken"),
                     Request.HasFormContentType && Request.Form.ContainsKey("__RequestVerificationToken"));

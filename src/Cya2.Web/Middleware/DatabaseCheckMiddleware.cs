@@ -51,7 +51,7 @@ public class DatabaseCheckMiddleware
             {
                 if (!_dbMonitor.IsConnected)
                 {
-                    _logger.LogWarning("Database unavailable for auth path {Path} - redirecting to error page", context.Request.Path);
+                    _logger.LogWarning("Database unavailable for authentication request - redirecting to error page");
                     context.Response.Redirect("/database-error", false);
                     return;
                 }
@@ -66,7 +66,7 @@ public class DatabaseCheckMiddleware
 
         if (!_dbMonitor.IsConnected)
         {
-            _logger.LogWarning("Database unavailable - redirecting from {Path} to error page", context.Request.Path);
+            _logger.LogWarning("Database unavailable - redirecting to error page");
             context.Response.Redirect("/database-error", false);
             return;
         }
