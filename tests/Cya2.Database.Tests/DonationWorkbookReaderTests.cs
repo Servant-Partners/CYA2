@@ -6,6 +6,11 @@ namespace Cya2.Database.Tests;
 
 public sealed class DonationWorkbookReaderTests
 {
+    static DonationWorkbookReaderTests()
+    {
+        ExcelPackage.License.SetNonCommercialOrganization("Servant Partners");
+    }
+
     private static readonly string[] Headers =
     [
         "Gift Date", "Name", "Gift Payment Type", "Gift Type", "Fund Split Amount", "Fund Notes",
