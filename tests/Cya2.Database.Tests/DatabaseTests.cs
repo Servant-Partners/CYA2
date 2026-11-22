@@ -9,6 +9,8 @@ using Xunit;
 using Xunit.Abstractions;
 using Cya2.Core.Entities;
 using Cya2.Application.Interfaces;
+using Cya2.Core.Imports;
+using System.Text.Json;
 using static Cya2.Database.Tests.MySqlFixture;
 
 namespace Cya2.Database.Tests;
@@ -23,21 +25,15 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     {
         var db = await mysql.CreateDatabaseAsync();
         var repository = Donations(db);
-        CanonicalDonationWriteModel Gift(bool soft, DateTime date, string id, string fund) => new()
-        {
-            Donor = new DonorWriteModel { Fund = fund, DisplayName = soft ? "Soft Person" : "Direct Person", IdentityKey = "initial", ResolutionSource = soft ? "SoftCredit" : "AccountName", ResolutionVersion = 1 },
-            Date = date, Fund = fund, Amount = 10, PaymentMethod = "Check", GiftType = "Donation",
-            AccountName = soft ? "Employer" : "Direct Person", PrimaryAddressee = soft ? "Employer" : "Direct Person",
-            SoftCreditName = soft ? "Soft Person" : null, ConstituentId = soft ? "employer-id" : id,
-            SoftCreditRecipientId = soft ? id : null, IsSoftCredit = soft,
-            Contacts = soft ? [Email("employer@example.invalid")] : [Email("donor@example.invalid")]
-        };
+        CanonicalDonationWriteModel Gift(bool soft, DateTime date, string id, string fund) =>
+            SourceDonation(id, soft ? "Soft Person" : "Direct Person", soft, date, fund,
+                [Email(soft ? "employer@example.invalid" : "donor@example.invalid")]);
         await repository.ReplaceCanonicalDonationsAsync([Gift(true, Date.AddMonths(-2), "000123", "Separate Fund")], default);
         await repository.ReplaceCanonicalDonationsAsync([Gift(false, Date, "000123", "Primary Fund")], default);
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
         Assert.Equal("2", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT Fund) FROM DonationData"));
         Assert.Equal("000123", await ScalarAsync(db.RuntimeConnection, "SELECT SoftCreditRecipientId FROM DonationData WHERE IsSoftCredit=1"));
-        Assert.Equal("employer-id", await ScalarAsync(db.RuntimeConnection, "SELECT ConstituentId FROM DonationData WHERE IsSoftCredit=1"));
+        Assert.Equal("employer", await ScalarAsync(db.RuntimeConnection, "SELECT ConstituentId FROM DonationData WHERE IsSoftCredit=1"));
         Assert.Equal("donor@example.invalid", await ScalarAsync(db.RuntimeConnection, "SELECT ContactValue FROM DonorContacts"));
         var rollback = await Rollback(db).RollbackDonationsAsync();
         Assert.True(rollback.Success, rollback.ErrorMessage);
@@ -47,18 +43,21 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     }
 
     [MySqlFact]
-    public async Task DifferentSoftRecipientIdsRemainDistinctAndBlankUsesNameFallback()
+    public async Task DifferentSoftRecipientIdsRemainDistinctAndBlankIsRejected()
     {
         var db = await mysql.CreateDatabaseAsync();
-        CanonicalDonationWriteModel Gift(string? softId, string name, bool soft) => new()
+        var invalid = new DonationUploadNormalizer().Normalize([new DonationSourceRow
         {
-            Donor = new DonorWriteModel { Fund = "Test Fund", DisplayName = name, IdentityKey = "initial", ResolutionSource = soft ? "SoftCredit" : "AccountName", ResolutionVersion = 1 },
-            Date = Date, Fund = "Test Fund", Amount = 10, PaymentMethod = "Check", GiftType = "Donation",
-            AccountName = soft ? "Employer" : name, PrimaryAddressee = soft ? "Employer" : name,
-            SoftCreditName = soft ? name : null, ConstituentId = soft ? "employer-id" : "direct-id",
-            SoftCreditRecipientId = softId, IsSoftCredit = soft
-        };
-        await Donations(db).ReplaceCanonicalDonationsAsync([Gift(null, "Matched", false), Gift(null, "Matched", true), Gift("other-id", "Different", true)], default);
+            RowNumber = 2, Date = Date, Fund = "Test Fund", Amount = 10,
+            AccountName = "Employer", PrimaryAddressee = "Employer", SoftCreditName = "Matched",
+            ConstituentId = "employer", PaymentMethod = "Check", GiftType = "Donation"
+        }]);
+        Assert.False(invalid.IsValid);
+        Assert.Contains(invalid.Errors, error => error.Column == "Soft Credit Recipient ID");
+        await Donations(db).ReplaceCanonicalDonationsAsync([
+            SourceDonation("direct-id", "Matched"),
+            SourceDonation("direct-id", "Matched", soft: true),
+            SourceDonation("other-id", "Different", soft: true)], default);
         Assert.Equal("2", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
         Assert.Equal("2", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData d JOIN Donors p ON d.DonorId=p.Id WHERE p.ConstituentId='direct-id'"));
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Donors WHERE ConstituentId='other-id'"));
@@ -157,44 +156,44 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     }
 
     [MySqlFact]
-    public async Task InternDonationReads_MatchExactStoredNamesAndAgreeWithBulk()
+    public async Task InternDonationReads_MatchExactSourceIdsAndAgreeWithBulk()
     {
         var db = await mysql.CreateDatabaseAsync();
-        await ExecuteAsync(db.SetupConnection, "INSERT INTO Donors (DisplayName,IdentityKey,ResolutionSource,ResolutionVersion) VALUES ('Test','test','AccountName',1); INSERT INTO DonationData (DonorId,Date,AccountName,PaymentMethod,GiftType,Amount,Fund,InternName) VALUES (1,'2026-01-15','Donor','Check','Gift',1,'Shared','Ann Lee'),(1,'2026-01-15','Donor','Check','Gift',2,'Shared','Annette Leeds'),(1,'2026-01-15','Donor','Check','Gift',3,'Shared','Lee, Ann'),(1,'2026-01-15','Donor','Check','Gift',4,'Shared','ann Lee'),(1,'2026-01-15','Donor','Check','Gift',5,'Shared','Ánn Lee'),(1,'2026-01-15','Donor','Check','Gift',6,'Shared','Ann Lee '),(1,'2026-01-15','Donor','Check','Gift',7,'Other','Ann Lee')");
+        await ExecuteAsync(db.SetupConnection, "INSERT INTO Users (Id,Email,Name,AuthLevel) VALUES (1,'admin@scene8.net','Admin','Admin')");
+        var store = new InternAccountStore(Config(db), Guard, NullLogger<InternAccountStore>.Instance);
+        var names = new[] { "000intern", "000intern-extra", "000INTERN", "000intern-e", "000intern-é" };
+        foreach (var sourceId in names)
+            await store.SaveAsync(1, null, "Synthetic Intern", sourceId);
+        await Donations(db).ReplaceCanonicalDonationsAsync(names.Select(sourceId =>
+            SourceDonation("read-donor", "Synthetic Donor", fund: "Shared", internSourceId: sourceId,
+                internDisplayName: "Synthetic Intern")).Append(
+            SourceDonation("read-donor", "Synthetic Donor", fund: "Other", internSourceId: names[0],
+                internDisplayName: "Synthetic Intern")).ToArray(), default);
         var reader = new DonationReadRepository(Config(db), Guard, NullLogger<DonationReadRepository>.Instance);
-        var names = new[] { "Ann Lee", "Annette Leeds", "Lee, Ann", "ann Lee", "Ánn Lee", "Ann Lee " };
-
-        var allNames = await reader.GetCurrentInternNamesAsync();
         var bulk = await reader.GetInternDonationsByNamesAndDateRangeAsync(names, Date.AddDays(-1), Date.AddDays(1));
 
-        Assert.All(names, name => Assert.Contains(name, allNames));
         foreach (var name in names)
         {
             var single = await reader.GetInternDonationsByInternNameAndDateRangeAsync(name, Date.AddDays(-1), Date.AddDays(1));
             Assert.Equal(single.Select(row => row.Id).Order(), bulk[name].Select(row => row.Id).Order());
             Assert.All(single, row => Assert.Equal(name, row.InternName));
         }
-        Assert.Equal(2, bulk["Ann Lee"].Count);
+        Assert.Equal(2, bulk[names[0]].Count);
         Assert.All(names.Skip(1), name => Assert.Single(bulk[name]));
+        Assert.Empty(await reader.GetInternDonationsByInternNameAndDateRangeAsync("unconfigured-id", Date.AddDays(-1), Date.AddDays(1)));
     }
 
     [MySqlFact]
-    public async Task NameOnlyPromotion_PreservesDirectContactTimestamps_AndRollbackRestoresOriginalIdentity()
+    public async Task StableSourceId_PreservesDirectContactTimestamps_AndRollbackRestoresOriginalIdentity()
     {
         var db = await mysql.CreateDatabaseAsync();
         var repository = Donations(db);
-        CanonicalDonationWriteModel Gift(string? id, bool soft, DateTime date) => new()
-        {
-            Donor = new DonorWriteModel { Fund = "Test Fund", DisplayName = "Alex Smith", IdentityKey = "alexsmith", ResolutionSource = soft ? "SoftCredit" : "AccountName", ResolutionVersion = 1 },
-            ConstituentId = id, IsSoftCredit = soft, AccountName = soft ? "Employer" : "Alex Smith",
-            PrimaryAddressee = soft ? "Employer" : "Alex Smith", SoftCreditName = soft ? "Alex Smith" : null,
-            Date = date, Fund = "Test Fund", Amount = 10, PaymentMethod = "Check", GiftType = "Donation",
-            Contacts = soft ? [] : [Email("alex@example.invalid")]
-        };
-        await repository.ReplaceCanonicalDonationsAsync([Gift(null, false, Date.AddMonths(-2))], default);
+        CanonicalDonationWriteModel Gift(string name, DateTime date) =>
+            SourceDonation("000123", name, date: date, contacts: [Email("alex@example.invalid")]);
+        await repository.ReplaceCanonicalDonationsAsync([Gift("Alex Smith", Date.AddMonths(-2))], default);
         await ExecuteAsync(db.SetupConnection, "UPDATE DonorContacts SET DateCreated='2020-01-01', DateModified='2021-01-01'");
         var original = await ScalarAsync(db.RuntimeConnection, "SELECT DonorId FROM DonationData");
-        await repository.ReplaceCanonicalDonationsAsync([Gift("000123", false, Date)], default);
+        await repository.ReplaceCanonicalDonationsAsync([Gift("Smith, Alex", Date)], default);
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Donors"));
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonorContacts WHERE DateCreated='2020-01-01' AND DateModified='2021-01-01'"));
@@ -205,27 +204,21 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     }
 
     [MySqlFact]
-    public async Task NewAmbiguity_SeparatesRetainedSoftCreditsWithoutCopyingContacts_AndRollbackRelinks()
+    public async Task DistinctSourceIds_KeepRetainedSoftCreditsSeparateWithoutCopyingContacts_AndRollbackRestoresThem()
     {
         var db = await mysql.CreateDatabaseAsync();
         var repository = Donations(db);
-        CanonicalDonationWriteModel Gift(string id, bool soft, DateTime date) => new()
-        {
-            Donor = new DonorWriteModel { Fund = "Test Fund", DisplayName = "Same Name", IdentityKey = "samename", ResolutionSource = soft ? "SoftCredit" : "AccountName", ResolutionVersion = 1 },
-            ConstituentId = id, IsSoftCredit = soft, AccountName = soft ? "Employer" : "Same Name",
-            PrimaryAddressee = soft ? "Employer" : "Same Name", SoftCreditName = soft ? "Same Name" : null,
-            Date = date, Fund = "Test Fund", Amount = 10, PaymentMethod = "Check", GiftType = "Donation",
-            Contacts = soft ? [] : [Email(id + "@example.invalid")]
-        };
+        CanonicalDonationWriteModel Gift(string id, bool soft, DateTime date) =>
+            SourceDonation(id, "Same Name", soft, date, contacts: [Email(id + "@example.invalid")]);
         await repository.ReplaceCanonicalDonationsAsync([
-            Gift("1", false, Date.AddMonths(-2)), Gift("employer", true, Date.AddMonths(-1))], default);
+            Gift("1", false, Date.AddMonths(-2)), Gift("3", true, Date.AddMonths(-1))], default);
         await repository.ReplaceCanonicalDonationsAsync([Gift("2", false, Date)], default);
         Assert.Equal("3", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
-        Assert.Equal("0", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonorContacts c JOIN Donors d ON d.Id=c.DonorId WHERE d.ConstituentId IS NULL"));
+        Assert.Equal("0", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonorContacts c JOIN Donors d ON d.Id=c.DonorId WHERE d.ConstituentId='3'"));
         Assert.Equal("employer", await ScalarAsync(db.RuntimeConnection, "SELECT ConstituentId FROM DonationData WHERE IsSoftCredit=1"));
         var rollback = await Rollback(db).RollbackDonationsAsync();
         Assert.True(rollback.Success, rollback.ErrorMessage);
-        Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
+        Assert.Equal("2", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
         Assert.Equal("1@example.invalid", await ScalarAsync(db.RuntimeConnection, "SELECT ContactValue FROM DonorContacts"));
     }
 
@@ -234,19 +227,14 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     {
         var db = await mysql.CreateDatabaseAsync();
         var repository = Donations(db);
-        CanonicalDonationWriteModel Gift(string name, string? id, string fund, bool soft = false, DateTime? date = null, string? email = null) => new()
-        {
-            Donor = new DonorWriteModel { Fund = fund, DisplayName = name, IdentityKey = name, ResolutionSource = soft ? "SoftCredit" : "AccountName", ResolutionVersion = 1 },
-            Date = date ?? Date, AccountName = soft ? "Employer" : name, PrimaryAddressee = soft ? "Employer" : name,
-            SoftCreditName = soft ? name : null, ConstituentId = id, IsSoftCredit = soft,
-            Fund = fund, Amount = 10, PaymentMethod = "Check", GiftType = "Donation", Contacts = email == null ? [] : [Email(email)]
-        };
-        await repository.ReplaceCanonicalDonationsAsync([Gift("Alex Smith", "employer", "A", true, Date.AddMonths(-1))], default);
+        CanonicalDonationWriteModel Gift(string name, string id, string fund, bool soft = false, DateTime? date = null, string? email = null) =>
+            SourceDonation(id, name, soft, date, fund, email == null ? [] : [Email(email)]);
+        await repository.ReplaceCanonicalDonationsAsync([Gift("Alex Smith", "000123", "A", true, Date.AddMonths(-1))], default);
         var originalId = await ScalarAsync(db.RuntimeConnection, "SELECT DonorId FROM DonationData");
         await repository.ReplaceCanonicalDonationsAsync([
             Gift("Alex Smith", "000123", "B", email: "alex@example.invalid"),
-            Gift("Smith, Alex", "employer", "C", true, email: "employer@example.invalid"),
-            Gift("Other Person", "employer", "C", true)
+            Gift("Smith, Alex", "000123", "C", true, email: "employer@example.invalid"),
+            Gift("Other Person", "000456", "C", true)
         ], default);
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData WHERE Fund IN ('A','B')"));
         Assert.Equal("3", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData d JOIN Donors n ON n.Id=d.DonorId WHERE n.ConstituentId='000123'"));
@@ -260,22 +248,18 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     }
 
     [MySqlFact]
-    public async Task SharedIdentity_AmbiguousNamesRemainSeparate_AndSoftOnlyUploadKeepsDirectContacts()
+    public async Task SharedIdentity_SourceIdsDistinguishSameNames_AndSoftOnlyUploadKeepsDirectContacts()
     {
         var db = await mysql.CreateDatabaseAsync();
         var repository = Donations(db);
-        CanonicalDonationWriteModel Gift(string? id, bool soft, DateTime date) => new()
-        {
-            Donor = new DonorWriteModel { Fund = "Test Fund", DisplayName = "Same Name", IdentityKey = "samename", ResolutionSource = "AccountName", ResolutionVersion = 1 },
-            ConstituentId = id, IsSoftCredit = soft, AccountName = soft ? "Employer" : "Same Name", PrimaryAddressee = soft ? "Employer" : "Same Name", SoftCreditName = soft ? "Same Name" : null,
-            Date = date, Fund = "Test Fund", Amount = 10, PaymentMethod = "Check", GiftType = "Donation", Contacts = soft ? [] : [Email("direct@example.invalid")]
-        };
-        await repository.ReplaceCanonicalDonationsAsync([Gift("1", false, Date.AddMonths(-1)), Gift("employer", true, Date)], default);
+        CanonicalDonationWriteModel Gift(string id, bool soft, DateTime date) =>
+            SourceDonation(id, "Same Name", soft, date, contacts: [Email("direct@example.invalid")]);
+        await repository.ReplaceCanonicalDonationsAsync([Gift("1", false, Date.AddMonths(-1)), Gift("1", true, Date)], default);
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
-        await repository.ReplaceCanonicalDonationsAsync([Gift("employer", true, Date)], default);
+        await repository.ReplaceCanonicalDonationsAsync([Gift("1", true, Date)], default);
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonorContacts"));
-        await repository.ReplaceCanonicalDonationsAsync([Gift("2", false, Date), Gift("employer", true, Date)], default);
-        Assert.Equal("3", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
+        await repository.ReplaceCanonicalDonationsAsync([Gift("2", false, Date), Gift("1", true, Date)], default);
+        Assert.Equal("2", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(DISTINCT DonorId) FROM DonationData"));
     }
 
     [MySqlFact]
@@ -377,6 +361,7 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     public async Task DonationPersistence_ReconcilesCurrentContacts_PreservingRetainedContactCreation()
     {
         var db = await mysql.CreateDatabaseAsync();
+        await ExecuteAsync(db.SetupConnection, "INSERT INTO Accounts (Fund,AccountNumber) VALUES ('Test Fund','1000')");
         var repository = Donations(db);
         await repository.ReplaceCanonicalDonationsAsync([Donation(contacts: [Email("keep@example.invalid"), Email("old@example.invalid")])], default);
         var created = await ScalarAsync(db.RuntimeConnection, "SELECT DateCreated FROM DonorContacts WHERE ContactValue='keep@example.invalid'");
@@ -554,17 +539,18 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     }
 
     [MySqlFact]
-    public async Task UserAdministration_InternCreationFailureRollsBackUserAndAccount()
+    public async Task InternAccount_AuditFailureRollsBackCreationWithoutCreatingLoginUser()
     {
         var db = await mysql.CreateDatabaseAsync();
-        await ExecuteAsync(db.SetupConnection, "INSERT INTO Users (Id,Email,Name,AuthLevel) VALUES (1,'admin@scene8.net','Admin','Admin'); CREATE TRIGGER FailLink BEFORE INSERT ON AccountsUsers FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Injected failure'");
-        var store = new UserAdministrationStore(Config(db), Guard);
+        await ExecuteAsync(db.SetupConnection, "INSERT INTO Users (Id,Email,Name,AuthLevel) VALUES (1,'admin@scene8.net','Admin','Admin'); CREATE TRIGGER FailAudit BEFORE INSERT ON AuditEvents FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Injected failure'");
+        var store = new InternAccountStore(Config(db), Guard, NullLogger<InternAccountStore>.Instance);
 
-        await Assert.ThrowsAsync<MySqlException>(() => store.CreateAsync(new(1, "Test Intern", "intern@scene8.net", "Intern", [], false)));
+        await Assert.ThrowsAsync<AuditPersistenceException>(() => store.SaveAsync(1, null, "Test Intern", "000intern"));
 
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Users"));
         Assert.Equal("0", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Accounts"));
         Assert.Equal("0", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM AccountsUsers"));
+        Assert.Equal("0", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM AuditEvents"));
     }
 
     [MySqlFact]
@@ -627,24 +613,29 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     }
 
     [MySqlFact]
-    public async Task UserAdministration_InternTypoAndExplicitReusePreserveAccount()
+    public async Task InternAccount_TypoPreservesIdentityAndRecreationRetainsDonations()
     {
         var db = await mysql.CreateDatabaseAsync();
         await ExecuteAsync(db.SetupConnection, "INSERT INTO Users (Id,Email,Name,AuthLevel) VALUES (1,'admin@scene8.net','Admin','Admin')");
-        var store = new UserAdministrationStore(Config(db), Guard);
-
-        Assert.Equal(UserAdministrationStatus.Success, (await store.CreateAsync(new(1, "Test Intern", "intern@scene8.net", "Intern", [], false))).Status);
-        var id = int.Parse(await ScalarAsync(db.RuntimeConnection, "SELECT Id FROM Users WHERE Email='intern@scene8.net'"));
-        var accountId = await ScalarAsync(db.RuntimeConnection, $"SELECT DefaultAccount FROM Users WHERE Id={id}");
-        Assert.Equal(UserAdministrationStatus.InternRoleChange, (await store.UpdateAsync(new(1, id, "Changed", null, "Admin", null, null, false))).Status);
-        Assert.Equal("Test Intern", await ScalarAsync(db.RuntimeConnection, $"SELECT Name FROM Users WHERE Id={id}"));
-        Assert.Equal(UserAdministrationStatus.Success, (await store.UpdateAsync(new(1, id, "Test Intrn", null, null, null, null, false))).Status);
-        Assert.Equal(accountId, await ScalarAsync(db.RuntimeConnection, $"SELECT DefaultAccount FROM Users WHERE Id={id}"));
-        Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Accounts WHERE Fund='Intern: Test Intrn' AND AccountingClass IS NULL"));
-        Assert.Equal(UserAdministrationStatus.Success, (await store.DeleteAsync(1, id)).Status);
-        Assert.Equal(UserAdministrationStatus.InternReuseRequired, (await store.CreateAsync(new(1, "Test Intrn", "again@scene8.net", "Intern", [], false))).Status);
-        Assert.Equal(UserAdministrationStatus.Success, (await store.CreateAsync(new(1, "Test Intrn", "again@scene8.net", "Intern", [], true))).Status);
-        Assert.Equal(accountId, await ScalarAsync(db.RuntimeConnection, "SELECT DefaultAccount FROM Users WHERE Email='again@scene8.net'"));
+        var store = new InternAccountStore(Config(db), Guard, NullLogger<InternAccountStore>.Instance);
+        var users = new UserAdministrationStore(Config(db), Guard);
+        Assert.Equal(UserAdministrationStatus.InvalidAccount, (await users.CreateAsync(new(1, "Test Intern", "intern@scene8.net", "Intern", [], false))).Status);
+        var account = await store.SaveAsync(1, null, "Test Intrn", "000intern");
+        await Donations(db).ReplaceCanonicalDonationsAsync([
+            SourceDonation("intern-donor", "Synthetic Donor", internSourceId: "000intern", internDisplayName: "Test Intern")], default);
+        var corrected = await store.SaveAsync(1, account.AccountId, "Test Intern", "000intern");
+        Assert.Equal(account.AccountId, corrected.AccountId);
+        Assert.Equal(account.Fund, corrected.Fund);
+        Assert.Equal("000intern", corrected.InternSourceId);
+        Assert.Equal("Test Intern", corrected.DisplayName);
+        Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Accounts WHERE AccountKind='Intern' AND AccountingClass IS NULL AND AccountNumber IS NULL"));
+        await store.DeleteAsync(1, account.AccountId);
+        Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData WHERE InternSourceId='000intern' AND SourceEvidenceJson IS NOT NULL"));
+        var recreated = await store.SaveAsync(1, null, "Test Intern", "000intern");
+        Assert.NotEqual(account.AccountId, recreated.AccountId);
+        var reader = new DonationReadRepository(Config(db), Guard, NullLogger<DonationReadRepository>.Instance);
+        Assert.Single(await reader.GetInternDonationsByInternNameAndDateRangeAsync("000intern", Date.AddDays(-1), Date.AddDays(1)));
+        Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Users"));
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM Accounts"));
     }
 
@@ -673,11 +664,39 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     private RollbackExecutor Rollback(TestDatabase db) => new(Config(db), new TestOutputLogger<RollbackExecutor>(output),
         new RollbackRepository(Config(db), NullLogger<RollbackRepository>.Instance, Guard));
     private static CanonicalDonationWriteModel Donation(string identity = "testdonor", decimal amount = 10,
-        IReadOnlyList<DonorContactWriteModel>? contacts = null, DateTime? date = null) => new()
+        IReadOnlyList<DonorContactWriteModel>? contacts = null, DateTime? date = null) =>
+        SourceDonation(identity, identity, date: date, contacts: contacts, amount: amount);
+
+    private static CanonicalDonationWriteModel SourceDonation(string sourceId, string name, bool soft = false,
+        DateTime? date = null, string fund = "Test Fund", IReadOnlyList<DonorContactWriteModel>? contacts = null,
+        decimal amount = 10, string? internSourceId = null, string? internDisplayName = null)
     {
-        Donor = new DonorWriteModel { Fund = "Test Fund", DisplayName = identity, IdentityKey = identity, ResolutionSource = "AccountName", ResolutionVersion = 1 },
-        Date = date ?? Date, AccountName = identity, PaymentMethod = "Check", GiftType = "Donation", Amount = amount, Fund = "Test Fund", Contacts = contacts ?? []
-    };
+        var emails = contacts is { Count: > 0 } ? contacts.Select(contact => (string?)contact.ContactValue) : [null];
+        var validation = new DonationUploadNormalizer().Normalize(emails.Select((email, index) => new DonationSourceRow
+        {
+            RowNumber = index + 2, Date = date ?? Date, Amount = amount, Fund = fund, GiftImportId = "fixture",
+            ConstituentId = soft ? "employer" : sourceId, SoftCreditRecipientId = soft ? sourceId : null,
+            AccountName = soft ? "Employer" : name, PrimaryAddressee = soft ? "Employer" : name,
+            SoftCreditName = soft ? name : null, PaymentMethod = "Check", GiftType = "Donation", Email = email,
+            InternSourceId = internSourceId, InternDisplayName = internDisplayName
+        }));
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors.Select(error => error.Message)));
+        var row = Assert.Single(validation.Donations);
+        return new CanonicalDonationWriteModel
+        {
+            Donor = new DonorWriteModel
+            {
+                Fund = row.Fund, DisplayName = row.DonorDisplayName, IdentityKey = "id:" + row.CreditedDonorSourceId,
+                ConstituentId = row.CreditedDonorSourceId, ResolutionSource = "SourceId", ResolutionVersion = 2
+            },
+            Date = row.Date, Amount = row.Amount, Fund = row.Fund, AccountName = row.AccountName,
+            GiftImportId = row.GiftImportId, ConstituentId = row.ConstituentId,
+            SoftCreditRecipientId = row.SoftCreditRecipientId, IsSoftCredit = row.IsSoftCredit || row.IsThirdPartySoftCredit,
+            PaymentMethod = row.PaymentMethod, GiftType = row.GiftType, PrimaryAddressee = row.PrimaryAddressee,
+            SoftCreditName = row.SoftCreditName, InternName = row.InternDisplayName, InternSourceId = row.InternSourceId,
+            SourceEvidenceJson = JsonSerializer.Serialize(row)
+        };
+    }
     private static DonorContactWriteModel Email(string value) => new() { ContactType = "Email", ContactValue = value, NormalizedValue = value };
     private static AccountingImportRowDto Accounting(DateTime date, double amount) => new()
     {

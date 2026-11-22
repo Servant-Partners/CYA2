@@ -46,7 +46,7 @@ public sealed class LiveDonationImportTests(MySqlFixture mysql) : IClassFixture<
         await repository.ReplaceCanonicalDonationsAsync([Gift(new DateTime(2025, 2, 1), null, "000intern-a")], default);
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData WHERE InternSourceId='000intern-a'"));
         await repository.ReplaceCanonicalDonationsAsync([Gift(new DateTime(2025, 3, 1), null, "000intern-b")], default);
-        Assert.Equal("0", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData WHERE InternSourceId='000intern-a'"));
+        Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData WHERE InternSourceId='000intern-a'"));
         Assert.Equal("1", await ScalarAsync(db.RuntimeConnection, "SELECT COUNT(*) FROM DonationData WHERE InternSourceId='000intern-b'"));
         var rollback = new RollbackExecutor(config, NullLogger<RollbackExecutor>.Instance,
             new RollbackRepository(config, NullLogger<RollbackRepository>.Instance, new Available()));

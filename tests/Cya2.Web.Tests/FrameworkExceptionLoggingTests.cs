@@ -53,7 +53,7 @@ public sealed class FrameworkExceptionLoggingTests
         Assert.All(logs.Entries, entry => Assert.DoesNotContain(Sentinel, entry.Text));
         Assert.Contains(logs.Entries, entry => entry.Category.StartsWith("Microsoft.AspNetCore", StringComparison.Ordinal) && entry.ExceptionText.Contains("The request failed."));
         Assert.Contains(logs.Entries, entry => entry.Message.Contains("Request failed.") && entry.Text.Contains("InvalidOperationException"));
-        Assert.Contains(logs.Entries, entry => entry.Category == "cya2.Controllers.UploadController" && entry.Message.Contains("Confirming donation import"));
+        Assert.Contains(logs.Entries, entry => entry.Category == "cya2.Controllers.UploadController" && entry.Message == "Donation import confirmation requested.");
     }
 
     [Fact]

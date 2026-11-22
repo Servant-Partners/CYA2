@@ -55,9 +55,11 @@ public sealed class GoogleSignInCultureTests
         try
         {
             CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(culture);
-            foreach (var key in new[] { "DonationReplacementBoundary", "DonationPreviewCounts", "DonationUnresolvedCounts", "DonationMappingPreviewNotice", "DonationOldDateConsent" })
-                Assert.False(localizer[key].ResourceNotFound);
-            Assert.Contains("2", localizer["DonationUnresolvedCounts", 2, 1].Value);
+            foreach (var key in new[] { "FirstDonation", "NumberOfRows", "NumberOfDuplicateRowsRemoved", "TotalNumberOfDonations", "DonationOldDateConsent", "PreparingUploadPreview" })
+            {
+                Assert.False(localizer[key].ResourceNotFound, key);
+                Assert.False(string.IsNullOrWhiteSpace(localizer[key].Value), key);
+            }
         }
         finally { CultureInfo.CurrentUICulture = originalCulture; }
     }

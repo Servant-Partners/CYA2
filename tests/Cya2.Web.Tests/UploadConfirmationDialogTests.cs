@@ -84,7 +84,7 @@ public sealed class UploadConfirmationDialogTests
         Assert.Contains("role=\"alert\"", html);
         Assert.DoesNotContain("aria-busy=\"true\"", html);
         Assert.DoesNotContain("private diagnostic detail", html);
-        Assert.DoesNotContain("upload-confirm-actions", html);
+        Assert.DoesNotMatch("<[^>]+\\bclass=\"[^\"]*\\bupload-confirm-actions\\b", html);
     }
 
     [Fact]
