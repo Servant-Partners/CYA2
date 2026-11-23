@@ -17,6 +17,8 @@ public static class HostServiceCollectionExtensions
     public static IServiceCollection AddCya2HostServices(this IServiceCollection services)
     {
         services.AddHttpContextAccessor();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<SessionValidationService>();
         services.AddScoped<UserSessionHydrationService>();
         services.AddScoped<PageLoadCorrelationContext>();
         services.AddScoped<CircuitHandler, PageLoadCircuitHandler>();
@@ -29,6 +31,7 @@ public static class HostServiceCollectionExtensions
         services.AddScoped<IAdminAuthorizationContext, AdminAuthorizationContext>();
         services.AddHostedService<ImportRetentionCleanupService>();
         services.AddHostedService<AuditRetentionCleanupService>();
+        services.AddHostedService<AuditReconciliationService>();
         services.AddSingleton<ImportWorkQueue>();
         services.AddSingleton<IImportWorkQueue>(sp => sp.GetRequiredService<ImportWorkQueue>());
         services.AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(sp =>

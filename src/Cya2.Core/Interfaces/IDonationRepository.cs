@@ -5,10 +5,15 @@ namespace Cya2.Core.Interfaces;
 
 public interface IDonationRepository
 {
-    Task BackupAndDeleteFromDateAsync(DateTime fromDate, string progressId, CancellationToken cancellationToken);
-    Task<DonationImportPersistenceResult> InsertCanonicalDonationsAsync(
+    Task<DonationImportPersistenceResult> ReplaceCanonicalDonationsAsync(
         IReadOnlyList<CanonicalDonationWriteModel> donations,
         CancellationToken cancellationToken);
+
+    Task<DonationImportPersistenceResult> ReplaceCanonicalDonationsAsync(
+        IReadOnlyList<CanonicalDonationWriteModel> donations,
+        CancellationToken cancellationToken,
+        Action<DonationPersistenceProgress> reportProgress)
+        => ReplaceCanonicalDonationsAsync(donations, cancellationToken);
 
     Task<List<DonationRecord>> GetRecentDonationsForDonorsAsync(
         IEnumerable<(string IdentityKey, string Fund)> donorKeys,

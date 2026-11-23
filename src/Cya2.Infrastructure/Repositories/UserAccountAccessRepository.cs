@@ -23,7 +23,7 @@ public sealed class UserAccountAccessRepository : IUserAccountAccessRepository
     {
         _dbGuard.ThrowIfUnavailable();
         const string sql = @"
-SELECT a.AccountId, a.Fund, a.AccountingClass, a.AccountNumber, a.CreatedAt, a.Overhead, a.SoftCredit, a.BalanceAdjustment
+SELECT a.*
 FROM Accounts a
 INNER JOIN AccountsUsers au ON a.AccountId = au.AccountId
 WHERE au.UserId = @UserId
@@ -62,7 +62,7 @@ ORDER BY u.Name, u.Email, u.Id";
     {
         _dbGuard.ThrowIfUnavailable();
         const string sql = @"
-SELECT AccountId, Fund, AccountingClass, AccountNumber, CreatedAt, Overhead, SoftCredit, BalanceAdjustment
+SELECT *
 FROM Accounts WHERE AccountId = @AccountId LIMIT 1";
         await using var conn = new MySqlConnection(ConnStr);
         return await conn.QueryFirstOrDefaultAsync<Account>(sql, new { AccountId = accountId });

@@ -9,7 +9,6 @@
 @using cya2.Components.Shared
 @using Cya2.Application.Interfaces
 @using Cya2.Application.DTOs
-@using Cya2.Core.ValueObjects
 @using Cya2.Core.Enums
 @using System.Security.Claims
 @inject AuthenticationStateProvider AuthStateProvider
@@ -116,7 +115,7 @@
                                      Change="@(async args => await accountSelection(args?.ToString() ?? string.Empty))"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                      AllowFiltering="@isAdminOrViewer"
-                                     TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))"
+                                     TextSelector="@(account => account.DisplayName)"
                                      Class="account-selector-dropdown-inline" />
                     }
                 </div>
@@ -363,7 +362,7 @@
             isAdminOrViewer = user.IsInRole("Admin")
                       || string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase)
                       || string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             presetOptions = GetPresetOptions();
             dateRangeState = DateRangeStateService.InitializeDateRange(SessionUserStateService);
@@ -382,13 +381,11 @@
                 Fund = account.Fund,
                 // Keep intern identity on selections because intern donor rows are keyed by intern context, not Fund alone.
                 InternName = userContext.IsIntern ? userContext.InternName : account.InternName,
-                DisplayName = userContext.IsIntern
-                    ? userContext.InternName
-                    : string.IsNullOrWhiteSpace(account.InternName) ? account.DisplayName : account.InternName,
+                DisplayName = string.IsNullOrWhiteSpace(account.InternName) ? account.DisplayName : account.DisplayName + " (Intern)",
                 AccountingClass = account.AccountingClass,
                 AccountNumber = account.AccountNumber,
                 Overhead = account.Overhead
-            }).GroupBy(account => account.SelectionKey, StringComparer.OrdinalIgnoreCase)
+            }).GroupBy(account => account.AccountId)
               .Select(group => group.First())
               .ToList() ?? new List<AccountOptionDto>();
 
@@ -440,9 +437,9 @@
                 await JS.InvokeVoidAsync("import", "/js/autocomplete-tab.js");
                 await JS.InvokeVoidAsync("enableAutocompleteTabBehavior", "donorAutoCompleteContainer");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                await JS.InvokeVoidAsync("console.error", ex.Message);
+                await JS.InvokeVoidAsync("console.error", "Unable to initialize donor search.");
             }
         }
     }
@@ -558,7 +555,7 @@
 
             var range = dateRangeState.SelectedPreset == Cya2.Application.DTOs.DateRangePreset.AllDates
                 ? null
-                : new DateRange(dateRangeState.StartDate, dateRangeState.EndDate);
+                : new Cya2.Core.ValueObjects.DateRange(dateRangeState.StartDate, dateRangeState.EndDate);
             donorsInRange = await DonorService.GetDonorSummariesForSelectionAsync(
                 currentAccount,
                 selectedSubAccount,
@@ -566,17 +563,23 @@
                 userId);
 
             PrepareDonorRows(donorsInRange);
+            foreach (var group in donorsInRange.GroupBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (var donor in group)
+                    donor.SelectionLabel = group.Count() > 1 ? $"{donor.Name} (record {donor.DonorId})" : donor.Name;
+            }
+            ClearDonorSelection();
             donorNames = donorsInRange
-                .Select(d => d.Name)
+                .Select(d => d.SelectionLabel)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(n => n)
                 .ToList();
             hasDonorResults = true;
 
-            SessionUserStateService.SelectedAccountFund = currentAccount.Fund;
+            SessionUserStateService.SelectedAccountFund = currentAccount.SelectionKey;
             if (!string.IsNullOrWhiteSpace(userId))
-                UserSelectionService.SetSelectedAccount(userId, currentAccount.Fund);
+                UserSelectionService.SetSelectedAccount(userId, currentAccount.SelectionKey);
 
             Logger.LogInformation("Loaded {Count} donors for accountId={AccountId}", donorsInRange.Count, currentAccount.AccountId);
             lastDonorLoadKey = requestKey;
@@ -597,7 +600,7 @@
 
         ResetDonorContact();
 
-        var selectedSummary = donorsInRange.FirstOrDefault(d => string.Equals(d.Name, selectedDonor, StringComparison.OrdinalIgnoreCase));
+        var selectedSummary = donorsInRange.FirstOrDefault(d => string.Equals(d.SelectionLabel, selectedDonor, StringComparison.OrdinalIgnoreCase));
         if (selectedSummary != null)
         {
             donorEmail = selectedSummary.Email ?? string.Empty;
@@ -731,7 +734,7 @@
     private async Task OnDonorRowSelect(DonorSummaryDto summary)
     {
         if (summary == null) return;
-        selectedDonor = summary.Name;
+        selectedDonor = summary.SelectionLabel;
         searchText = string.Empty;
         await OnDonorSelected();
     }
@@ -833,11 +836,11 @@
         }
     }
 
-    private DateRange? GetDonorSummaryWarmupRange()
+    private Cya2.Core.ValueObjects.DateRange? GetDonorSummaryWarmupRange()
     {
         return dateRangeState.SelectedPreset == Cya2.Application.DTOs.DateRangePreset.AllDates
             ? null
-            : new DateRange(dateRangeState.StartDate, dateRangeState.EndDate);
+            : new Cya2.Core.ValueObjects.DateRange(dateRangeState.StartDate, dateRangeState.EndDate);
     }
 
     private async Task accountSelection(string accountName)
@@ -884,7 +887,7 @@
         }
 
         var selectedSummary = donorsInRange.FirstOrDefault(donor =>
-            string.Equals(donor.Name, selectedDonor, StringComparison.OrdinalIgnoreCase));
+            string.Equals(donor.SelectionLabel, selectedDonor, StringComparison.OrdinalIgnoreCase));
         var payload = selectedSummary == null
             ? string.Empty
             : FormatDonorContactForCopy(selectedSummary);
@@ -945,11 +948,10 @@
             return;
         }
 
-        var funds = await ResolveFundNamesAsync(currentAccount, selectedSubAccount);
-
         var req = new
         {
-            Funds = funds,
+            AccountId = currentAccount.AccountId,
+            SelectedSubAccount = selectedSubAccount,
             AllDates = dateRangeState.SelectedPreset == Cya2.Application.DTOs.DateRangePreset.AllDates,
             StartDate = dateRangeState.SelectedPreset == Cya2.Application.DTOs.DateRangePreset.AllDates ? (DateTime?)null : dateRangeState.StartDate,
             EndDate = dateRangeState.SelectedPreset == Cya2.Application.DTOs.DateRangePreset.AllDates ? (DateTime?)null : dateRangeState.EndDate,
@@ -974,6 +976,7 @@
         DonorFrequency.Quarterly => "Quarterly",
         DonorFrequency.Yearly   => "Yearly",
         DonorFrequency.Sporadic => "Sporadic",
+        DonorFrequency.Mixed    => "Mixed",
         _                       => ""
     };
 

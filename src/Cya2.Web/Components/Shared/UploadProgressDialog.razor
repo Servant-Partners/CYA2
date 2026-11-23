@@ -1,13 +1,20 @@
 @using Radzen
+@implements IDisposable
 @inject Cya2.Application.Interfaces.ISessionImportProgressService SessionImportProgressService
 @inject NavigationManager Navigation
 @inject DialogService DialogService
 @inject cya2.Services.Imports.ImportProgressService ProgressService
 @inject Cya2.Application.Interfaces.IImportAuthorizationContext ImportAuthorizationContext
 @inject IStringLocalizer<Resource> Localizer
+@inject Cya2.Application.Interfaces.IImportOrchestrationService ImportOrchestrationService
 
 @code {
     [Parameter] public string ProgressId { get; set; } = string.Empty;
+    [Parameter] public Func<Task>? SubmitImport { get; set; }
+    private bool _submissionFailed;
+    private bool _cancelRequested;
+    private int _polling;
+    private readonly DateTime _openedAtUtc = DateTime.UtcNow;
 
     private System.Threading.Timer? _timer;
 
@@ -26,6 +33,8 @@
     
     private class ImportStepDto
     {
+        public DateTime StartedAtUtc { get; set; }
+        public DateTime? FinishedAtUtc { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;
         public bool IsCompleted { get; set; }
@@ -37,15 +46,47 @@
     private int Percent => _p.ExpectedRows > 0 ? (int)(100L * _p.TotalRows / _p.ExpectedRows) : 0;
     private bool _waitingForId => string.IsNullOrWhiteSpace(ProgressId);
 
+    private async Task CancelImport()
+    {
+        try
+        {
+            if (await ImportOrchestrationService.CancelImportAsync(ProgressId)) _cancelRequested = true;
+            else _p.Errors.Add(Localizer["ImportCancelUnavailable"]);
+        }
+        catch
+        {
+            _p.Errors.Add(Localizer["SafeOperationError"]);
+        }
+    }
+
     protected override void OnInitialized()
     {
         SessionImportProgressService.ImportProgressIdChanged += OnProgressIdChanged;
         // If session service already has an id (was set before dialog initialized), pick it up now
-        if (!string.IsNullOrWhiteSpace(SessionImportProgressService.ImportProgressId))
+        if (string.IsNullOrWhiteSpace(ProgressId) && !string.IsNullOrWhiteSpace(SessionImportProgressService.ImportProgressId))
         {
             OnProgressIdChanged(SessionImportProgressService.ImportProgressId!);
         }
         _timer = new System.Threading.Timer(async _ => await Poll(), null, 250, 750);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || SubmitImport is null) return;
+        try
+        {
+            await Task.Delay(50);
+            await SubmitImport();
+        }
+        catch (Exception exception)
+        {
+            _submissionFailed = true;
+            _p.IsComplete = true;
+            _p.Status = Localizer["ImportSubmissionFailed"];
+            _p.Errors.Add(cya2.Services.AdminNotificationPolicy.UploadErrorDetail(exception, Localizer));
+            _timer?.Dispose();
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void OnProgressIdChanged(string id)
@@ -56,12 +97,12 @@
 
     private async Task Poll()
     {
+        if (_submissionFailed || System.Threading.Interlocked.Exchange(ref _polling, 1) != 0) return;
         try
         {
             if (string.IsNullOrWhiteSpace(ProgressId))
             {
-                _p.Status = GetLocalizedString("WaitingForProgressId", "Waiting for ProgressId...");
-                await InvokeAsync(StateHasChanged);
+                await InvokeAsync(() => { _p.Status = GetLocalizedString("WaitingForProgressId", "Waiting for ProgressId..."); StateHasChanged(); });
                 return;
             }
 
@@ -69,11 +110,13 @@
             var srv = actor is null ? null : ProgressService.GetOwned(ProgressId, actor.UserId);
             if (srv == null)
             {
-                _p.Status = GetLocalizedString("InitializingImport", "Initializing import...");
-                await InvokeAsync(StateHasChanged);
+                await InvokeAsync(() => { _p.Status = GetLocalizedString("InitializingImport", "Initializing import..."); StateHasChanged(); });
                 return;
             }
 
+            await InvokeAsync(() =>
+            {
+            if (_submissionFailed) return;
             _p.TotalRows = srv.TotalRows;
             _p.InsertedRows = srv.InsertedRows;
             _p.FailedRows = srv.FailedRows;
@@ -81,19 +124,20 @@
             _p.Status = string.IsNullOrWhiteSpace(srv.Status)
                 ? GetLocalizedString("Processing", "Processing...")
                 : srv.Status;
-            _p.Errors = srv.Errors?.ToList() ?? new List<string>();
+            _p.Errors = srv.Errors.ToList();
             _p.IsComplete = srv.IsComplete;
             _p.ImportType = srv.ImportType ?? string.Empty;
 
             // Map steps
-            _p.Steps = srv.Steps?.Select(s => new ImportStepDto
+            _p.Steps = srv.Steps.Select(s => new ImportStepDto
             {
                 Name = s.Name,
                 Status = s.Status,
                 IsCompleted = s.IsCompleted,
                 IsActive = s.IsActive,
                 Details = s.Details
-            }).ToList() ?? new List<ImportStepDto>();
+                , StartedAtUtc = s.StartedAtUtc, FinishedAtUtc = s.FinishedAtUtc
+            }).ToList();
 
             // If import is complete, stop polling and update status
             if (_p.IsComplete)
@@ -102,7 +146,11 @@
                 _timer = null;
                 
                 // Set final status without repeating row count
-                if (_p.FailedRows > 0)
+                if (_p.Errors.Count > 0)
+                {
+                    _p.Status = srv.Status;
+                }
+                else if (_p.FailedRows > 0)
                 {
                     _p.Status = string.Format(
                         GetLocalizedString("CompletedWithFailedRows", "{0} - {1} failed rows"),
@@ -115,15 +163,14 @@
                 }
             }
 
-            await InvokeAsync(StateHasChanged);
+            StateHasChanged();
+            });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _p.Status = string.Format(
-                GetLocalizedString("ErrorPollingProgress", "Error polling progress: {0}"),
-                ex.Message);
-            await InvokeAsync(StateHasChanged);
+            await InvokeAsync(() => { _p.Status = GetLocalizedString("SafeOperationError", "The operation could not be completed. Please try again."); StateHasChanged(); });
         }
+        finally { System.Threading.Interlocked.Exchange(ref _polling, 0); }
     }
 
     public void Dispose()
@@ -143,9 +190,16 @@
     }
 }
 
-<div class="upload-progress-dialog-root" style="padding:0.75rem; width:100%; min-width:0; box-sizing:border-box; overflow-x:hidden;">
-    <RadzenStack Orientation="Orientation.Vertical" Gap="0.75rem">
+<div class="upload-progress-dialog-root">
+    <RadzenStack Orientation="Orientation.Vertical" Gap="0.35rem" Class="upload-progress-content">
         <RadzenText TextStyle="TextStyle.Subtitle2">@GetDialogTitle()</RadzenText>
+        <div role="status" aria-live="polite" style="min-height:28px;">
+            @Localizer["ImportElapsed", (DateTime.UtcNow - _openedAtUtc).ToString(@"hh\:mm\:ss")]
+            @if (!_p.IsComplete)
+            {
+                <div class="spinner-border spinner-border-sm upload-progress-spinner" aria-hidden="true"></div>
+            }
+        </div>
         
         @* Always reserve space for progress bar to prevent size changes *@
         <div>
@@ -166,136 +220,39 @@
         </div>
 
         @* Step-by-step progress - Each step gets its own permanent box *@
-        <RadzenCard Style="background-color: #f8f9fa; padding: 0.75rem;">
-            <RadzenStack Orientation="Orientation.Vertical" Gap="0.5rem">
-                @* Define all possible steps with permanent display boxes *@
-                
-                @* Step 1: File Validation *@
-                <div style="border: 1px solid @GetStepBorderColor("File Validation"); border-radius: 0.375rem; padding: 0.5rem; background-color: @GetStepBackgroundColor("File Validation"); min-height: 50px;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        @GetStepIcon("File Validation")
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: #212529; font-size: 0.9em;">1. @GetLocalizedStepName("File Validation")</div>
-                            <div style="font-size: 0.8em; color: #6c757d; margin-top: 0.125rem;">
-                                @GetStepStatus("File Validation")
-                            </div>
-                            @if (!string.IsNullOrEmpty(GetStepDetails("File Validation")))
-                            {
-                                <div style="font-size: 0.75em; color: #495057; margin-top: 0.125rem; font-style: italic;">
-                                    @GetStepDetails("File Validation")
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </div>
-
-                @* Step 2: Legacy Backup (conditional) *@
-                @{
-                    var legacyBackupStep = GetStep("Legacy Backup");
-                }
-                @if (legacyBackupStep != null)
+        <RadzenCard Class="upload-progress-steps" Style="background-color: #f8f9fa; padding: 0.35rem;">
+            <RadzenStack Orientation="Orientation.Vertical" Gap="0.25rem">
+                @foreach (var step in SummarySteps())
                 {
-                    <div style="border: 1px solid @GetStepBorderColor("Legacy Backup"); border-radius: 0.375rem; padding: 0.5rem; background-color: @GetStepBackgroundColor("Legacy Backup"); min-height: 50px;">
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            @GetStepIcon("Legacy Backup")
-                            <div style="flex: 1;">
-                                <div style="font-weight: 600; color: #212529; font-size: 0.9em;">2. @GetLocalizedStepName("Legacy Backup")</div>
-                                <div style="font-size: 0.8em; color: #6c757d; margin-top: 0.125rem;">
-                                    @GetStepStatus("Legacy Backup")
-                                </div>
-                                @if (!string.IsNullOrEmpty(GetStepDetails("Legacy Backup")))
-                                {
-                                    <div style="font-size: 0.75em; color: #495057; margin-top: 0.125rem; font-style: italic;">
-                                        @GetStepDetails("Legacy Backup")
-                                    </div>
-                                }
-                            </div>
+                    <div @key="step.Name" class="upload-progress-step @(step.IsCompleted ? "completed" : null)">
+                        <div style="display:flex; align-items:center; gap:0.5rem;">
+                            <i class="bi @(step.IsCompleted ? "bi-check-circle-fill upload-progress-step-check" : step.IsActive ? "bi-arrow-repeat" : "bi-circle")" aria-hidden="true"></i>
+                            <strong>@GetLocalizedStepName(step.Name)</strong>
                         </div>
+                        <span>@Localizer[step.IsCompleted ? "Completed" : step.IsActive ? (_p.IsComplete ? "ImportFailed" : "ImportWorking") : "NotStarted"]</span>
                     </div>
                 }
-
-                @* Step 3: Data Analysis *@
-                <div style="border: 1px solid @GetStepBorderColor("Data Analysis"); border-radius: 0.375rem; padding: 0.5rem; background-color: @GetStepBackgroundColor("Data Analysis"); min-height: 50px;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        @GetStepIcon("Data Analysis")
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: #212529; font-size: 0.9em;">@(legacyBackupStep != null ? "3" : "2"). @GetLocalizedStepName("Data Analysis")</div>
-                            <div style="font-size: 0.8em; color: #6c757d; margin-top: 0.125rem;">
-                                @GetStepStatus("Data Analysis")
-                            </div>
-                            @if (!string.IsNullOrEmpty(GetStepDetails("Data Analysis")))
-                            {
-                                <div style="font-size: 0.75em; color: #495057; margin-top: 0.125rem; font-style: italic;">
-                                    @GetStepDetails("Data Analysis")
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </div>
-
-                @* Step 4: Database Backup *@
-                <div style="border: 1px solid @GetStepBorderColor("Database Backup"); border-radius: 0.375rem; padding: 0.5rem; background-color: @GetStepBackgroundColor("Database Backup"); min-height: 50px;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        @GetStepIcon("Database Backup")
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: #212529; font-size: 0.9em;">@(legacyBackupStep != null ? "4" : "3"). @GetLocalizedStepName("Database Backup")</div>
-                            <div style="font-size: 0.8em; color: #6c757d; margin-top: 0.125rem;">
-                                @GetStepStatus("Database Backup")
-                            </div>
-                            @if (!string.IsNullOrEmpty(GetStepDetails("Database Backup")))
-                            {
-                                <div style="font-size: 0.75em; color: #495057; margin-top: 0.125rem; font-style: italic;">
-                                    @GetStepDetails("Database Backup")
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </div>
-
-                @* Step 5: Data Import *@
-                <div style="border: 1px solid @GetStepBorderColor("Data Import"); border-radius: 0.375rem; padding: 0.5rem; background-color: @GetStepBackgroundColor("Data Import"); min-height: 50px;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        @GetStepIcon("Data Import")
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: #212529; font-size: 0.9em;">@(legacyBackupStep != null ? "5" : "4"). @GetLocalizedStepName("Data Import")</div>
-                            <div style="font-size: 0.8em; color: #6c757d; margin-top: 0.125rem;">
-                                @GetStepStatus("Data Import")
-                            </div>
-                            @if (!string.IsNullOrEmpty(GetStepDetails("Data Import")))
-                            {
-                                <div style="font-size: 0.75em; color: #495057; margin-top: 0.125rem; font-style: italic;">
-                                    @GetStepDetails("Data Import")
-                                </div>
-                            }
-                        </div>
-                    </div>
-                </div>
             </RadzenStack>
         </RadzenCard>
 
-        @if (_waitingForId)
-        {
-            <div style="text-align: center; color: #6c757d; font-style: italic;">@GetLocalizedString("UploadInProgress", "Upload in progress...")</div>
-        }
-
         @* Overall status *@
         <div style="font-size: 0.9em; color: #495057; padding: 0.5rem; background-color: #e9ecef; border-radius: 0.25rem;">
-            @GetLocalizedString("Status", "Status"): @_p.Status
+            @GetLocalizedString("Status", "Status"): @Localizer[_p.IsComplete ? (_p.Errors.Count > 0 || _p.FailedRows > 0 ? "ImportFailed" : "Completed") : "ImportWorking"]
         </div>
         
         @* Errors section - Reserve space to prevent size changes *@
-        <div>
-            @if (_p.Errors?.Count > 0)
+        <div class="upload-progress-errors">
+            @if (_p.Errors.Count > 0)
             {
                 <RadzenAlert AlertStyle="AlertStyle.Warning" Title="@GetLocalizedString("ImportWarnings", "Import Warnings")" Shade="Shade.Light">
-                    <ul style="margin: 0; padding-left: 1rem;">
-                        @foreach (var e in _p.Errors.Take(10))
+                    <ul class="upload-progress-error-list">
+                        @foreach (var e in _p.Errors.Take(2))
                         {
                             <li style="font-size: 0.85em;">@e</li>
                         }
-                        @if (_p.Errors.Count > 10)
+                        @if (_p.Errors.Count > 2)
                         {
-                             <li style="font-size: 0.85em;"><em>@string.Format(GetLocalizedString("MoreErrors", "... and {0} more errors"), _p.Errors.Count - 10)</em></li>
+                             <li style="font-size: 0.85em;"><em>@string.Format(GetLocalizedString("MoreErrors", "... and {0} more errors"), _p.Errors.Count - 2)</em></li>
                         }
                     </ul>
                 </RadzenAlert>
@@ -303,13 +260,15 @@
         </div>
         
         @* Action buttons *@
-        <div class="upload-progress-actions" style="display:flex; justify-content:flex-end; padding-top: .5rem;">
+        <div class="upload-progress-actions">
             @if (_p.IsComplete)
             {
                 <RadzenButton Text="@GetLocalizedString("Done", "Done")" ButtonStyle="ButtonStyle.Success" Click="@(() => DialogService.Close(true))" />
             }
             else
             {
+                <RadzenButton Text="@Localizer[_cancelRequested ? "ImportCancelRequested" : "Cancel"]" ButtonStyle="ButtonStyle.Danger"
+                              Disabled="@(_cancelRequested || _waitingForId)" Click="@CancelImport" />
                 <RadzenButton Text="@GetLocalizedString("Close", "Close")" ButtonStyle="ButtonStyle.Primary" Click="@(() => DialogService.Close(false))" />
             }
         </div>
@@ -318,29 +277,127 @@
 
 <style>
     .upload-progress-dialog-root {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        height: min(560px, 88vh);
+        max-height: 88vh;
         min-width: 0 !important;
+        overflow: hidden;
+        padding: 0.5rem;
+        width: 100%;
+    }
+
+    .upload-progress-content {
+        flex: 1;
+        min-height: 0;
+    }
+
+    .upload-progress-spinner {
+        margin-left: 0.4rem;
+        margin-right: 0.25rem;
+        vertical-align: -0.1em;
+    }
+
+    .upload-progress-steps {
+        flex: 1;
+        min-height: 0;
+    }
+
+    .upload-progress-step {
+        align-items: center;
+        background-color: #f8f9fa;
+        border: 1px solid;
+        border-radius: 0.375rem;
+        box-sizing: border-box;
+        display: flex;
+        justify-content: space-between;
+        min-height: 40px;
+        padding: 0.3rem 0.45rem;
+    }
+
+    .upload-progress-step.completed {
+        border-color: #0a3b6b !important;
+    }
+
+    .upload-progress-step-check {
+        color: #0a3b6b;
+    }
+
+    .upload-progress-step span {
+        color: #495057;
+        font-size: 0.875rem;
+        margin-left: 0.5rem;
+        text-align: right;
+    }
+
+    .upload-progress-errors {
+        flex: 0 0 auto;
+        max-height: 82px;
+        overflow: hidden;
+    }
+
+    .upload-progress-error-list {
+        margin: 0;
+        max-height: 2.8em;
+        overflow: hidden;
+        padding-left: 1rem;
+    }
+
+    .upload-progress-actions {
+        display: flex;
+        flex: 0 0 auto;
+        gap: 0.75rem;
+        justify-content: flex-end;
+        padding-top: 0.25rem;
     }
 
     @@media (max-width: 768px) {
+        .upload-progress-dialog-root {
+            height: min(560px, 88vh);
+            padding: 0.35rem;
+        }
+
+        .upload-progress-step {
+            min-height: 36px;
+            padding: 0.2rem 0.35rem;
+        }
+
         .upload-progress-metrics {
             flex-wrap: wrap;
             gap: 0.25rem 0.75rem;
         }
 
-        .upload-progress-actions {
-            justify-content: stretch;
-        }
-
-        .upload-progress-actions .rz-button {
-            width: 100%;
-            justify-content: center;
-            white-space: normal;
-            text-align: center;
-        }
     }
 </style>
 
 @code {
+    private static readonly string[] SummaryNames = ["ImportSummaryPrepare", "ImportSummaryBackup", "ImportSummaryUpdate", "ImportSummaryFinish"];
+
+    private static int SummaryIndex(string name) => name switch
+    {
+        "ImportSnapshot" or "Database Backup" or "Legacy Backup" => 1,
+        "ImportDonorWrites" or "ImportDonationWrites" or "ImportContactEvidence" or "ImportContactProjection" or "ImportContactWrites"
+            or "ImportFrequencyHistory" or "ImportFrequencyCalculation" or "ImportFrequencyWrites" or "Data Import" => 2,
+        "ImportCommit" or "ImportCacheInvalidation" => 3,
+        _ => 0
+    };
+
+    private IEnumerable<ImportStepDto> SummarySteps()
+    {
+        var current = _p.Steps.Count == 0 ? 0 : _p.Steps.Max(step => SummaryIndex(step.Name));
+        var successful = _p.IsComplete && _p.Errors.Count == 0 && _p.FailedRows == 0;
+        for (var index = 0; index < SummaryNames.Length; index++)
+        {
+            yield return new ImportStepDto
+            {
+                Name = SummaryNames[index],
+                IsCompleted = successful || index < current,
+                IsActive = !successful && index == current
+            };
+        }
+    }
+
     private ImportStepDto? GetStep(string stepName)
     {
         return _p.Steps.FirstOrDefault(s => s.Name == stepName);
@@ -361,6 +418,7 @@
     
     private string GetLocalizedStepName(string stepName)
     {
+        if (stepName.StartsWith("Import", StringComparison.Ordinal)) return Localizer[stepName];
         return stepName switch
         {
             "File Validation" => GetLocalizedString("FileValidation", "File Validation"),

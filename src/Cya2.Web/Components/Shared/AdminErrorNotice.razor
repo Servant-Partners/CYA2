@@ -1,0 +1,15 @@
+<div class="alert @(IsWarning ? "alert-warning" : "alert-danger") d-flex align-items-start gap-3" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="flex-grow-1" style="min-width:0; overflow-wrap:anywhere;">
+        <strong>@Summary</strong>
+        <div style="white-space:pre-wrap;">@Detail</div>
+    </div>
+    <button type="button" class="btn-close" aria-label="@CloseLabel" @onclick="OnClose"></button>
+</div>
+
+@code {
+    [Parameter] public string Summary { get; set; } = string.Empty;
+    [Parameter] public string Detail { get; set; } = string.Empty;
+    [Parameter] public string CloseLabel { get; set; } = string.Empty;
+    [Parameter] public bool IsWarning { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}

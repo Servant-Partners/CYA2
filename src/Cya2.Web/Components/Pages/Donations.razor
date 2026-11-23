@@ -1,6 +1,5 @@
 ﻿@page "/donations"
 @using Microsoft.AspNetCore.Authorization
-@using Cya2.Shared.Utilities
 @using Cya2.Core.Utilities
 @using Radzen
 @using Microsoft.AspNetCore.Components.Authorization
@@ -25,7 +24,6 @@
 @using Cya2.Application.Interfaces
 @using Cya2.Application.DTOs
 @using DateRangePreset = Cya2.Application.DTOs.DateRangePreset
-@using Cya2.Core.ValueObjects
 @inject IDonationService DonationService
 @inject IDonationPresentationService DonationPresentationService
 @inject IUserAccountContextService UserAccountContextService
@@ -326,7 +324,7 @@
                                      Change="@OnAccountDropdownChanged"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                       AllowFiltering="@isAdminOrViewer"
-                                      TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))" />
+                                      TextSelector="@(account => account.DisplayName)" />
                     }
                 </div>
 
@@ -805,7 +803,7 @@
             isAdminOrViewer = user.IsInRole("Admin") ||
                               string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             presetOptions = GetPresetOptions();
 
@@ -830,9 +828,9 @@
 
             isLoading = false;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = $"Error loading data: {ex.Message}";
+            errorMessage = Localizer["SafeOperationError"];
             isLoading = false;
         }
     }
@@ -859,7 +857,7 @@
             var dto = await DonationService.GetDonationDataAsync(
                 passedAccount ?? string.Empty,
                 subAccountValue,
-                new DateRange(dateRangeState.StartDate, dateRangeState.EndDate),
+                new Cya2.Core.ValueObjects.DateRange(dateRangeState.StartDate, dateRangeState.EndDate),
                 userId,
                 isAdminOrViewer,
                 forceRefresh: false) ?? new DonationDataDto();
@@ -950,9 +948,9 @@
             // Mark that we need to reload the giving grid once the component has rendered and the grid ref is available
             _needReloadGivingGrid = true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = $"Error loading donation data: {ex.Message}";
+            errorMessage = Localizer["SafeOperationError"];
         }
         finally
         {
@@ -1092,9 +1090,9 @@
                 await InvokeAsync(StateHasChanged);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = $"Error applying date filter: {ex.Message}";
+            errorMessage = Localizer["SafeOperationError"];
         }
     }
 

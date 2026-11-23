@@ -104,6 +104,63 @@ public sealed class ImportUploadValidatorTests
         Assert.NotEmpty(result);
     }
 
+    [Fact]
+    public async Task SuppliedWorkbookValidatorReplacesGenericWorkbookOpen()
+    {
+        var validator = CreateValidator();
+        using var stream = CreateOoxmlLookingPackage("invalid XML", "invalid XML");
+        var expected = stream.ToArray();
+        var calls = 0;
+
+        var result = await validator.ReadAndValidateAsync(stream, "custom.xlsx", validateWorkbook: bytes =>
+        {
+            calls++;
+            Assert.Equal(expected, bytes);
+        });
+
+        Assert.Equal(1, calls);
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("wrong-extension")]
+    [InlineData("oversized")]
+    [InlineData("corrupt-zip")]
+    [InlineData("missing-entries")]
+    public async Task UploadGuardsRunBeforeSuppliedWorkbookValidator(string failure)
+    {
+        var validator = CreateValidator();
+        using var stream = failure switch
+        {
+            "wrong-extension" => CreateValidWorkbook(),
+            "oversized" => new MemoryStream(new byte[MaximumUploadBytes + 1]),
+            "missing-entries" => new MemoryStream([0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            _ => new MemoryStream([0x50, 0x4B, 0x03, 0x04, 1, 2, 3])
+        };
+        var calls = 0;
+
+        await Assert.ThrowsAsync<ImportUploadValidationException>(() => validator.ReadAndValidateAsync(
+            stream, failure == "wrong-extension" ? "upload.xls" : "upload.xlsx", validateWorkbook: _ => calls++));
+
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task CallbackCancellationPropagatesAndReleasesValidationSlot()
+    {
+        var validator = CreateValidator(maximumConcurrentUploads: 1);
+        using var stream = CreateValidWorkbook();
+        using var cancellation = new CancellationTokenSource();
+        var expected = new OperationCanceledException(cancellation.Token);
+
+        var actual = await Assert.ThrowsAsync<OperationCanceledException>(() => validator.ReadAndValidateAsync(
+            stream, "cancelled.xlsx", validateWorkbook: _ => throw expected));
+
+        Assert.Same(expected, actual);
+        using var retry = CreateValidWorkbook();
+        Assert.NotEmpty(await validator.ReadAndValidateAsync(retry, "retry.xlsx"));
+    }
+
     private static ImportUploadValidator CreateValidator(int maximumConcurrentUploads = 2)
         => new(Options.Create(new ImportUploadOptions
         {

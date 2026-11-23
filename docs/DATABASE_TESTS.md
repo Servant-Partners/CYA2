@@ -18,20 +18,31 @@ Set the variable before test discovery. In Visual Studio, restart the IDE from a
 
 The fixture generates credentials, starts a loopback-only random host port, waits for MySQL readiness, creates a fresh database and restricted runtime identity for each test, and removes the container after execution. It does not mount host data or reuse a developer database. A forcibly terminated test host can leave a container behind: remove only the container with the generated `cya2-tests-` name shown by `docker ps -a` using `docker rm --force <container-name>`.
 
+The fixture explicitly creates each database with default character set `utf8mb4` and collation `utf8mb4_0900_ai_ci`. It does not test a database with an incompatible `utf8mb3` default or prove deployed Azure MySQL 8.4 behavior. Verify database-level defaults and run a synthetic UI import in each target environment; see [Azure setup](AZURE_SETUP.md#4-create-the-fresh-database-and-initialize-the-schema).
+
 ## Coverage
 
-- Fresh schema initialization through the built DatabaseMigrator executable, application of repository SQL migrations, repeat-run idempotency, and baseline checksum rejection.
+- Fresh initial-schema setup through the built DatabaseMigrator executable; required columns, snapshot precision and absence of migration history; rejection of reruns on a nonempty database without changing the tested data.
 - Runtime identity limited to SELECT, INSERT, UPDATE, DELETE and CREATE TEMPORARY TABLES; persistent CREATE/ALTER/DROP and GRANT denied.
 - Canonical donation writes, donor deduplication, stale-contact removal, retained DateCreated, and donation repository readback.
+- Contact freshness: unchanged timestamps, exact/casing-only retained-value changes, new values with null DateModified, removed values, rollback-restored timestamps and untouched donors outside the upload.
 - Injected contact-insert failure after donor/donation writes verifies the transaction leaves no partial persistent data.
 - Donation backup/replacement/rollback restores donations and contacts and removes new orphan donors.
-- Accounting import repository parameterized fallback, full backup/replacement/rollback including rows before the replacement window.
+- Atomic accounting staging/publication, full backup/replacement/rollback including rows before the replacement window.
+- Publication failures preserve existing rows, contacts and snapshots; rollback restores touched donors whose only prior gifts predate the replacement window; pre-cancelled replacement preserves data.
 - Missing donation snapshot produces a safe failed rollback without deleting data.
+- Constituent identity: shared donors across funds, organization IDs excluded from credited identities, ambiguous names kept separate, verified direct contacts preserved on soft-credit-only uploads, and full rollback of historical relinking.
+- Soft-credit recipient IDs: shared direct/soft IDs across funds, distinct IDs, blank-ID fallback, preservation of intermediary and recipient IDs, retained donation re-resolution and rollback.
+- Name-only promotion preserves direct contact timestamps; newly ambiguous retained soft credits do not inherit constituent-specific contacts.
+- User administration: self-lockout and concurrent administrator deletion, duplicate-email races, failed deletion and intern creation, combined profile/access rollback, default-account reconciliation, intern typo/reuse, and language/Google-binding updates that do not overwrite newer administrator changes. Browser and deployed-database acceptance remain separate.
+- Required audit failures roll back bootstrap, user creation/update/deletion, both import publications and both rollback phases. Tests verify shared start/completion OperationId, numeric actor/target preservation after deletion, idempotent reconciliation excluding completed/current-host/recent work, and the 90-day cutoff boundary. See [audit operations](AUDIT_OPERATIONS.md).
 
-These tests exercise import **persistence**, not Excel parsing, OAuth, Blazor UI uploads, or the optional LOAD DATA LOCAL INFILE path. They do not prove Azure configuration, production workload performance, contact DateModified behavior, every migration error path, or account/subaccount reporting semantics. No production code is changed by this suite.
+`ImportValidationTests` also runs without Docker and exercises the actual processors with synthetic in-memory Excel workbooks and fake persistence. Coverage includes required Constituent ID and Soft Credit Recipient ID headers with blank values allowed, leading-zero ID preservation, source-ID preservation during duplicate consolidation, soft-credit contact exclusion, invalid/empty rejection, domain invalidation, pre-cancellation, uncertain outcomes and shared write serialization. MySQL cases remain opt-in. Accounting no longer uses local-infile loading or partial live-write fallbacks. See [the import safety contract](IMPORT_SAFETY.md); the constituent schema is defined in the evolving initial schema, not a new migration.
+
+These tests do not exercise OAuth or Blazor UI uploads, or prove hosting configuration, production workload performance, initialization recovery after partial DDL, lost commit acknowledgements, or account/subaccount reporting semantics.
 
 ## CI
 
 `.github/workflows/mysql-integration-tests.yml` explicitly enables Docker tests on pushes to main and manual dispatch, uploads TRX results and removes interrupted containers. No secrets or external MySQL service are needed. It has no deployment or approval steps. The existing deployment workflow is unchanged: its ordinary solution run skips the opt-in database tests, so **the separate MySQL job does not currently gate deployment**. Review its result independently before promotion; making deployment depend on it is a separate pipeline change.
 
-Local validation during initial implementation could verify compilation, discovery and skipped behavior only: Docker CLI was not installed. An enabled local/CI run is required before claiming MySQL behavior has passed.
+Final audit follow-up validation passed **53/53 database-project tests**, with zero skipped and captured process exit code **0**, including disposable MySQL and non-Docker workbook/fake-persistence cases. The temporary TRX result was captured and no disposable test container remained. Solution build succeeded; Application tests passed **225/225** and Web tests **77/77**. Browser acceptance, separate-process concurrency, actual process-kill recovery and production-scale workload validation remain separate. Test results are local artifacts, not proof of deployed-provider behavior.

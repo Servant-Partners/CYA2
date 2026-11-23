@@ -17,7 +17,7 @@ public sealed class AuthorizationBoundaryTests
     public async Task ImportFromPreview_RejectsDifferentOwnerWithoutCallingProcessor()
     {
         var previews = CreatePreviewStore();
-        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations")));
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
         var processor = new RecordingImportProcessor("donations");
         var service = CreateImportService(previews, processor, new ImportActor("owner-2", true));
 
@@ -32,7 +32,7 @@ public sealed class AuthorizationBoundaryTests
     public async Task ImportFromPreview_AllowsOwnerAndRecordsOwnerOnProgress()
     {
         var previews = CreatePreviewStore();
-        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations")));
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1, 2, 3], "test.xlsx", "", DateTime.UtcNow, "owner-1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
         var processor = new RecordingImportProcessor("donations");
         var progress = new RecordingProgressService();
         var service = CreateImportService(previews, processor, new ImportActor("owner-1", true), progress);
@@ -43,6 +43,61 @@ public sealed class AuthorizationBoundaryTests
         Assert.NotNull(result);
         Assert.Single(progress.Started);
         Assert.Equal("owner-1", progress.Started[0].OwnerUserId);
+    }
+
+    [Fact]
+    public async Task CommittedImportDoesNotDuplicateTransactionalSuccessAudit()
+    {
+        var previews = CreatePreviewStore();
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
+        var processor = new RecordingImportProcessor("donations") { Committed = true };
+        var audit = new TerminalFailureAudit();
+        var service = CreateImportService(previews, processor, new ImportActor("1", true), audit: audit);
+        var result = await service.ImportFromPreviewAsync("preview-1", "donations");
+        Assert.True(result.PublicationCommitted);
+        Assert.Equal(1, result.InsertedRows);
+        Assert.Empty(result.Errors);
+        Assert.Empty(result.Warnings);
+        Assert.Equal([AuditOutcomes.Started], audit.Outcomes);
+    }
+
+    [Fact]
+    public async Task ImportDoesNotRunWhenRequiredStartAuditFails()
+    {
+        var previews = CreatePreviewStore();
+        Assert.True(previews.TrySet("preview-1", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations") { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today) }));
+        var processor = new RecordingImportProcessor("donations");
+        var audit = new TerminalFailureAudit { RejectStart = true };
+        var service = CreateImportService(previews, processor, new ImportActor("1", true), audit: audit);
+
+        await Assert.ThrowsAsync<AuditPersistenceException>(() => service.ImportFromPreviewAsync("preview-1", "donations"));
+
+        Assert.Equal(0, processor.CallCount);
+    }
+
+    [Fact]
+    public async Task OldDonationBoundaryRequiresAcknowledgmentWithoutConsumingPreview()
+    {
+        var previews = CreatePreviewStore();
+        Assert.True(previews.TrySet("old", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations")
+        { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-381) }));
+        var processor = new RecordingImportProcessor("donations");
+        var service = CreateImportService(previews, processor, new ImportActor("1", true));
+        await Assert.ThrowsAsync<ImportUploadValidationException>(() => service.ImportFromPreviewAsync("old", "donations"));
+        Assert.Equal(0, processor.CallCount);
+        await service.ImportFromPreviewAsync("old", "donations", true);
+        Assert.Equal(1, processor.CallCount);
+    }
+
+    [Fact]
+    public async Task QueuedOldDonationBoundaryRequiresAcknowledgmentWithoutConsumingPreview()
+    {
+        var previews = CreatePreviewStore();
+        Assert.True(previews.TrySet("old", new ImportPreview([1], "test.xlsx", "", DateTime.UtcNow, "1", "donations")
+        { MinimumDonationDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-381) }));
+        var service = CreateImportService(previews, new RecordingImportProcessor("donations"), new ImportActor("1", true));
+        await Assert.ThrowsAsync<ImportUploadValidationException>(() => service.StartImportFromPreviewAsync("old", "donations"));
+        Assert.True(previews.TryRemoveOwned("old", "1", "donations", out _));
     }
 
     [Fact]
@@ -58,6 +113,49 @@ public sealed class AuthorizationBoundaryTests
         var service = new DonorExportService(donorService, context, authorization);
 
         var result = await service.GetExportDataAsync("7", false, ["Forbidden"], true, null, null);
+
+        Assert.False(result.FundsAuthorized);
+        Assert.Equal(0, donorService.ReadCount);
+    }
+
+    [Theory]
+    [InlineData("Primary", true)]
+    [InlineData("All", false)]
+    [InlineData("Sub_2", true)]
+    public async Task DonorExport_UsesAuthorizedAccountSelection(string selection, bool allDates)
+    {
+        var donorService = new RecordingDonorService();
+        var authorization = CreateAuthorizationService(new User { Id = 7, Email = "user@example.test", AuthLevel = "User" }, new Dictionary<int, HashSet<int>> { [7] = [12] });
+        var context = new FakeUserAccountContextService(new UserAccountContext
+        {
+            UserId = 7,
+            Accounts = [new UserAccountContextAccount { AccountId = 12, Fund = "Allowed", InternName = "Example Intern" }]
+        });
+        var service = new DonorExportService(donorService, context, authorization);
+        var start = new DateTime(2025, 1, 1);
+        var end = new DateTime(2025, 12, 31);
+
+        var result = await service.GetSelectionExportDataAsync("7", false, 12, selection, allDates, start, end);
+
+        Assert.True(result.FundsAuthorized);
+        Assert.Equal(1, donorService.ReadCount);
+        Assert.Equal(12, donorService.SelectedAccount!.AccountId);
+        Assert.Equal("Example Intern", donorService.SelectedAccount.InternName);
+        Assert.Equal(selection, donorService.Selection);
+        Assert.Equal("7", donorService.SelectionUserId);
+        if (allDates) Assert.Null(donorService.SelectionRange);
+        else Assert.Equal(start, donorService.SelectionRange!.StartDate);
+    }
+
+    [Fact]
+    public async Task DonorExport_RejectsUnauthorizedAccountEvenIfContextContainsIt()
+    {
+        var donorService = new RecordingDonorService();
+        var authorization = CreateAuthorizationService(new User { Id = 7, Email = "user@example.test", AuthLevel = "User" }, new Dictionary<int, HashSet<int>> { [7] = [12] });
+        var context = new FakeUserAccountContextService(new UserAccountContext { Accounts = [new UserAccountContextAccount { AccountId = 13, Fund = "Other" }] });
+        var service = new DonorExportService(donorService, context, authorization);
+
+        var result = await service.GetSelectionExportDataAsync("7", false, 13, "All", true, null, null);
 
         Assert.False(result.FundsAuthorized);
         Assert.Equal(0, donorService.ReadCount);
@@ -97,11 +195,57 @@ public sealed class AuthorizationBoundaryTests
         Assert.Equal(0, donorService.ReadCount);
     }
 
+    [Fact]
+    public async Task PreviewReturnsInformationalUnresolvedCountsAndRetainsPayload()
+    {
+        var previews = new ImportPreviewStore(Options.Create(new ImportUploadOptions()));
+        var mappings = new MappingReader();
+        var service = new ImportOrchestrationService([new RecordingImportProcessor("donations")],
+            new RecordingProgressService(), new RecordingWorkQueue(), previews,
+            new ImportUploadValidator(Options.Create(new ImportUploadOptions())),
+            new FakeImportAuthorizationContext(new ImportActor("1", true)), new NoOpAuditEventService(),
+            NullLogger<ImportOrchestrationService>.Instance, new WorkbookReader(), accountMappingReader: mappings);
+        OfficeOpenXml.ExcelPackage.License.SetNonCommercialOrganization("Servant Partners");
+        using var package = new OfficeOpenXml.ExcelPackage();
+        package.Workbook.Worksheets.Add("Data").Cells[1, 1].Value = "Synthetic";
+        using var stream = new MemoryStream(package.GetAsByteArray());
+        var preview = await service.PreviewAsync(stream, "donations", "test.xlsx", "");
+        Assert.Equal(2, preview.UnresolvedNormalDonationCount);
+        Assert.Equal(1, preview.UnresolvedInternDonationCount);
+        Assert.Equal(1, preview.CanonicalDonationCount);
+        Assert.True(previews.TryRemoveOwned(preview.PreviewId, "1", "donations", out _));
+        Assert.Equal(1, mappings.Calls);
+    }
+
+    private sealed class MappingReader : IDonationAccountMappingReader
+    {
+        public int Calls;
+        public Task<DonationAccountMappingCounts> GetCountsAsync(IReadOnlyList<Cya2.Core.Imports.NormalizedDonation> donations, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new DonationAccountMappingCounts(2, 1));
+        }
+    }
+
+    private sealed class WorkbookReader : IDonationWorkbookReader
+    {
+        public Cya2.Core.Imports.DonationUploadValidationResult Read(Stream workbook, CancellationToken cancellationToken = default) => new()
+        {
+            Errors = [], SourceRowCount = 1,
+            Donations = [new Cya2.Core.Imports.NormalizedDonation
+            {
+                SourceRows = [2], Date = DateTime.Today, Amount = 1, Fund = "Unknown", AccountName = "",
+                DonorDisplayName = "Synthetic", PaymentMethod = "", GiftType = ""
+            }]
+        };
+    }
+
     private static ImportOrchestrationService CreateImportService(
         ImportPreviewStore previews,
         RecordingImportProcessor processor,
         ImportActor actor,
-        RecordingProgressService? progress = null)
+        RecordingProgressService? progress = null,
+        IAuditEventService? audit = null)
         => new ImportOrchestrationService(
             [processor],
             progress ?? new RecordingProgressService(),
@@ -109,7 +253,7 @@ public sealed class AuthorizationBoundaryTests
             previews,
             new ImportUploadValidator(Options.Create(new ImportUploadOptions())),
             new FakeImportAuthorizationContext(actor),
-            new NoOpAuditEventService(),
+            audit ?? new NoOpAuditEventService(),
             NullLogger<ImportOrchestrationService>.Instance);
 
     private static ImportPreviewStore CreatePreviewStore()
@@ -134,11 +278,28 @@ public sealed class AuthorizationBoundaryTests
     {
         public string ImportType => importType;
         public int CallCount { get; private set; }
+        public bool Committed;
 
         public Task<ImportResult> ProcessAsync(Stream file, string progressId, CancellationToken cancellationToken)
         {
             CallCount++;
-            return Task.FromResult(new ImportResult { ProgressId = progressId });
+            return Task.FromResult(new ImportResult { ProgressId = progressId, PublicationCommitted = Committed, InsertedRows = Committed ? 1 : 0 });
+        }
+    }
+
+    private sealed class TerminalFailureAudit : IAuditEventService
+    {
+        public List<string> Outcomes { get; } = [];
+        public bool RejectStart;
+        public Task RecordRequiredAsync(int? actorUserId, string eventType, string outcome, string? traceId = null, int? itemCount = null, CancellationToken cancellationToken = default)
+        {
+            if (RejectStart) throw new AuditPersistenceException();
+            return RecordAsync(actorUserId, eventType, outcome, traceId, itemCount, cancellationToken);
+        }
+        public Task RecordAsync(int? actorUserId, string eventType, string outcome, string? traceId = null, int? itemCount = null, CancellationToken cancellationToken = default)
+        {
+            Outcomes.Add(outcome);
+            return Task.CompletedTask;
         }
     }
 
@@ -171,13 +332,17 @@ public sealed class AuthorizationBoundaryTests
     private sealed class RecordingDonorService : IDonorService
     {
         public int ReadCount { get; private set; }
+        public AccountOptionDto? SelectedAccount { get; private set; }
+        public string? Selection { get; private set; }
+        public string? SelectionUserId { get; private set; }
+        public DateRange? SelectionRange { get; private set; }
         public string? GetLastQuery() => null;
         public Task<List<DonorSummaryDto>> GetAllDonorSummariesAsync(IEnumerable<string> fundNames) { ReadCount++; return Task.FromResult(new List<DonorSummaryDto>()); }
         public Task<List<DonorSummaryDto>> GetDonorSummariesAsync(IEnumerable<string> fundNames, DateRange dateRange) { ReadCount++; return Task.FromResult(new List<DonorSummaryDto>()); }
         public Task<List<DonorSummaryDto>> GetDonorSummariesAsync(string accountFund, DateRange dateRange) => Task.FromResult(new List<DonorSummaryDto>());
         public Task<List<DonorSummaryDto>> GetDonorSummariesForAccountAsync(int accountId, string accountFund, DateRange dateRange) => Task.FromResult(new List<DonorSummaryDto>());
         public Task<List<DonorSummaryDto>> GetDonorSummariesForAccountAsync(AccountOptionDto account, DateRange dateRange, string userId = "") => Task.FromResult(new List<DonorSummaryDto>());
-        public Task<List<DonorSummaryDto>> GetDonorSummariesForSelectionAsync(AccountOptionDto account, string selectedSubAccount, DateRange? dateRange, string userId = "") => Task.FromResult(new List<DonorSummaryDto>());
+        public Task<List<DonorSummaryDto>> GetDonorSummariesForSelectionAsync(AccountOptionDto account, string selectedSubAccount, DateRange? dateRange, string userId = "") { ReadCount++; SelectedAccount = account; Selection = selectedSubAccount; SelectionRange = dateRange; SelectionUserId = userId; return Task.FromResult(new List<DonorSummaryDto>()); }
         public Task<List<DonorSummaryDto>> GetMissingGiftDonorsAsync(AccountOptionDto account, DateRange dateRange) => Task.FromResult(new List<DonorSummaryDto>());
         public Task WarmMissingGiftDonorsFromDataAsync(AccountOptionDto account, IReadOnlyList<DonationRecord> donations, DateRange dateRange, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<List<DonorSummaryDto>> GetAllDonorSummariesAsync(int accountId, string accountFund) => Task.FromResult(new List<DonorSummaryDto>());
@@ -220,6 +385,8 @@ public sealed class AuthorizationBoundaryTests
 
     private sealed class NoOpAuditEventService : IAuditEventService
     {
+        public Task RecordRequiredAsync(int? actorUserId, string eventType, string outcome, string? traceId = null, int? itemCount = null, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
         public Task RecordAsync(int? actorUserId, string eventType, string outcome, string? traceId = null, int? itemCount = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
     }

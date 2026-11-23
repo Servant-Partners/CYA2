@@ -419,7 +419,7 @@ else
                                      Change="@OnAccountSelectionAsync"
                                      Placeholder="@Localizer["ChooseAccount"]"
                                       AllowFiltering="@canSearchAccounts"
-                                      TextSelector="@(account => InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))"
+                                      TextSelector="@(account => account.DisplayName)"
                                      Class="account-selector-dropdown-inline" />
                     }
                 </div>
@@ -1168,7 +1168,6 @@ private ElementReference customOverheadElement;
 
 private FinancialDashboardDto dashboardData = new();
 private FinancialSummaryDto customSummary = new();
-private string debugMessage = string.Empty;
 
 private const int MaxDashboardMemoryCacheItems = 15;
 
@@ -1286,7 +1285,7 @@ private bool showMissingGiftDialog = false;
             var now = DateTime.Today;
             var range = new Cya2.Core.ValueObjects.DateRange(now.AddMonths(-6), now);
             var account = dashboardData.UserAccounts.FirstOrDefault(a =>
-                string.Equals(a.Fund, selectedAccount, StringComparison.OrdinalIgnoreCase));
+                string.Equals(a.SelectionKey, selectedAccount, StringComparison.Ordinal));
 
             missingGiftDonors = account == null
                 ? new()
@@ -1294,6 +1293,7 @@ private bool showMissingGiftDialog = false;
                 {
                     AccountId = account.AccountId,
                     Fund = account.Fund,
+                    InternName = account.InternName,
                     AccountingClass = account.AccountingClass,
                     AccountNumber = account.AccountNumber,
                     Overhead = account.Overhead
@@ -1351,7 +1351,7 @@ private bool showMissingGiftDialog = false;
             var authLevel = user.FindFirstValue("AuthLevel") ?? string.Empty;
             isAdminUser = user.IsInRole("Admin") || string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase);
             canSearchAccounts = isAdminUser || string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
 
             userName = user.FindFirstValue("UserName") ??
                       user.FindFirstValue(ClaimTypes.GivenName) ??
@@ -1390,15 +1390,14 @@ private bool showMissingGiftDialog = false;
                 return;
             }
 
-            requestedFund = homeAuthorization.Context?.IsIntern == true
-                ? homeAuthorization.Context.InternName
-                : homeAuthorization.SelectedAccount.Fund;
+            requestedFund = string.IsNullOrWhiteSpace(homeAuthorization.SelectedAccount.InternName)
+                ? homeAuthorization.SelectedAccount.Fund
+                : homeAuthorization.SelectedAccount.InternName;
             dashboardData = await DashboardService.GetDashboardSummaryDataAsync(requestedFund, cachedUserId);
             isInternUser = dashboardData.IsInternUser;
             canSearchAccounts = dashboardData.CanSearchAccounts;
             isAdminUser = homeAuthorization.Context?.IsAdminOrViewer == true && !homeAuthorization.Context.IsViewer;
             selectedAccount = ResolveSelectedAccount(dashboardData);
-            BuildDebugMessage(string.IsNullOrWhiteSpace(requestedFund) ? "initial-summary-load" : "initial-summary-load-requested-fund");
 
             var defaultFundFromDto = dashboardData.UserAccounts.FirstOrDefault(a => a.IsDefault)?.SelectionKey;
             if (string.IsNullOrWhiteSpace(defaultFundFromDto))
@@ -1430,8 +1429,7 @@ private bool showMissingGiftDialog = false;
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Home.OnInitializedAsync failed");
-            BuildDebugMessage("initial-load-error", ex.Message);
+            Logger.LogError("Home initialization failed. ExceptionType={ExceptionType}", ex.GetType().Name);
         }
         finally
         {
@@ -1637,9 +1635,9 @@ private bool showMissingGiftDialog = false;
             }
 
             isRequestedAccountAccessDenied = false;
-            selectedAccount = homeAuthorization.Context?.IsIntern == true
-                ? homeAuthorization.Context.InternName
-                : homeAuthorization.SelectedAccount.Fund ?? string.Empty;
+            selectedAccount = string.IsNullOrWhiteSpace(homeAuthorization.SelectedAccount.InternName)
+                ? homeAuthorization.SelectedAccount.Fund ?? string.Empty
+                : homeAuthorization.SelectedAccount.InternName;
             RefreshSelectedAccountMode();
             var result = await DashboardService.GetDashboardDataAsync(selectedAccount, selectionUserId);
             if (requestVersion != accountRequestVersion)
@@ -1648,6 +1646,7 @@ private bool showMissingGiftDialog = false;
             }
 
             dashboardData = result;
+            RefreshSelectedAccountMode();
             Logger.LogInformation("Home account selection data loaded");
 
 
@@ -1689,12 +1688,10 @@ private bool showMissingGiftDialog = false;
             }
             catch { }
             await ComputeMissingGiftAlertsAsync();
-            BuildDebugMessage("account-selection");
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Home.accountSelection failed");
-            BuildDebugMessage("account-selection-error", ex.Message);
+            Logger.LogError("Home account selection failed. ExceptionType={ExceptionType}", ex.GetType().Name);
         }
         finally
         {
@@ -1792,7 +1789,8 @@ private bool showMissingGiftDialog = false;
     private void RefreshSelectedAccountMode()
     {
         // Intern mode hides fund-only Home features because intern accounts have donation data but no accounting data.
-        isInternAccountSelected = InternAccountUtility.IsInternFund(selectedAccount);
+        isInternAccountSelected = dashboardData.UserAccounts.Any(account =>
+            string.Equals(account.SelectionKey, selectedAccount, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(account.InternName));
     }
 
     private Cya2.Core.ValueObjects.DateRange ResolveActiveDateRange()
@@ -1804,36 +1802,6 @@ private bool showMissingGiftDialog = false;
 
         var now = DateTime.Now;
         return new Cya2.Core.ValueObjects.DateRange(new DateTime(now.Year, now.Month, 1), now);
-    }
-
-    private void BuildDebugMessage(string source, string? note = null)
-    {
-        try
-        {
-            var lines = new List<string>
-            {
-                $"Source={source}",
-                $"UserId={cachedUserId}",
-                $"SelectedAccount={selectedAccount}",
-                $"Dashboard.SelectedAccount={dashboardData.SelectedAccount}",
-                $"HasAccountData={dashboardData.HasAccountData}",
-                $"UserAccounts={dashboardData.UserAccounts?.Count ?? 0}",
-                $"CurrentMonth: Donations={dashboardData.CurrentMonth?.TotalDonations:C2}, Expenses={dashboardData.CurrentMonth?.TotalExpenses:C2}, Overhead={dashboardData.CurrentMonth?.TotalOverhead:C2}, InternalTransfers={dashboardData.CurrentMonth?.InternalTransfers:C2}",
-                $"PriorMonth: Donations={dashboardData.PriorMonth?.TotalDonations:C2}, Expenses={dashboardData.PriorMonth?.TotalExpenses:C2}",
-                $"CurrentYear: Donations={dashboardData.CurrentYear?.TotalDonations:C2}, Expenses={dashboardData.CurrentYear?.TotalExpenses:C2}"
-            };
-
-            if (!string.IsNullOrWhiteSpace(note))
-            {
-                lines.Add($"Note={note}");
-            }
-
-            debugMessage = string.Join("\n", lines);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Home.BuildDebugMessage failed");
-        }
     }
 
     private void ShowOverheadTooltip(ElementReference element)
@@ -1851,20 +1819,4 @@ private bool showMissingGiftDialog = false;
         TooltipService.Close();
     }
 
-    private async Task CopyDebugMessageAsync()
-    {
-        if (string.IsNullOrEmpty(debugMessage))
-        {
-            return;
-        }
-
-        try
-        {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", debugMessage);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "CopyDebugMessageAsync failed");
-        }
-    }
 }

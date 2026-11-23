@@ -36,6 +36,8 @@
 @inject Cya2.Application.Interfaces.IUserIdResolver UserIdResolver
 @inject Cya2.Application.Interfaces.IUserAuthorizationService UserAuthorizationService
 @inject IAccountImportService AccountImportService
+@inject IUserImportService UserImportService
+@inject Cya2.Application.Services.InternAccountService InternAccountService
 
 <RadzenStack Orientation="Orientation.Vertical" Gap="1rem" Class="rz-pt-0 rz-px-4 rz-pb-4" Style="max-width:100%; overflow-x:hidden; box-sizing:border-box;">
     <!-- Top row: accounts buttons on the left, upload buttons on the right -->
@@ -96,6 +98,13 @@
         </div>
     </RadzenStack>
 
+    @foreach (var notice in adminErrorNotices)
+    {
+        <AdminErrorNotice @key="notice" Summary="@notice.Summary" Detail="@notice.Detail"
+                          IsWarning="@(notice.Severity == NotificationSeverity.Warning)" CloseLabel="@Localizer["Close"]"
+                          OnClose="@(() => adminErrorNotices.Remove(notice))" />
+    }
+
     <!-- CSS Grid container for equal width cards -->
     <div class="admin-cards-grid">
         <!-- Manage Fundraising Accounts section -->
@@ -109,14 +118,53 @@
                     <!-- Toggle row (no special bottom margin so it matches other rows) -->
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="2rem" Class="admin-form-row admin-form-first-row">
                         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Style="width: 220px;" Class="admin-form-label">
-                            <RadzenText TextStyle="TextStyle.Subtitle2" Class="admin-label" Style="font-weight: bold;">@(createSubFund ? Localizer["ManageSecondaryFunds"] : Localizer["ManagePrimaryAccounts"])</RadzenText>
+                            <RadzenText TextStyle="TextStyle.Subtitle2" Class="admin-label" Style="font-weight: bold;">@Localizer["ManageFundraisingAccounts"]</RadzenText>
                         </RadzenStack>
-                        <div style="flex: 1; display:flex; align-items:center;">
-                            <RadzenSwitch @bind-value="createSubFund" Class="admin-mode-switch" />
-                        </div>
+                        <RadzenFormField Variant="Variant.Outlined" Style="flex: 1;">
+                            <CustomDropdown TItem="string" TValue="string" Data="@(new[] { "Primary", "Sub", "Intern" })"
+                                            TextSelector="@(mode => Localizer[mode == "Primary" ? "PrimaryAccount" : mode == "Sub" ? "SecondaryFund" : "InternAccount"].Value)"
+                                            ValueSelector="@(mode => mode)" @bind-Value="accountManagementMode" />
+                        </RadzenFormField>
                     </RadzenStack>
 
-                    @if (!createSubFund)
+                    @if (accountManagementMode == "Intern")
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="2rem" Class="admin-form-row">
+                            <RadzenText TextStyle="TextStyle.Subtitle2" Class="admin-label" Style="font-weight: bold; width: 220px;">@Localizer["InternAccount"]</RadzenText>
+                            <RadzenFormField Variant="Variant.Outlined" Style="flex: 1;">
+                                <CustomDropdown TItem="Account" TValue="int" Data="@internAccountOptions"
+                                                TextSelector="@(account => account.DisplayName ?? string.Empty)" ValueSelector="@(account => account.AccountId)"
+                                                Value="@selectedInternAccountId" ValueChanged="@((int value) => SelectInternAccount(value))"
+                                                Placeholder="@Localizer["SelectAccount"]" Searchable="true" SearchPlaceholder="@Localizer["Search"]" />
+                            </RadzenFormField>
+                        </RadzenStack>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="2rem" Class="admin-form-row">
+                            <RadzenText TextStyle="TextStyle.Subtitle2" Class="admin-label" Style="font-weight: bold; width: 220px;">@Localizer["InternName"]</RadzenText>
+                            <RadzenFormField Variant="Variant.Outlined" Style="flex: 1;">
+                                <RadzenTextBox @bind-Value="internAccountName" MaxLength="255" Placeholder="@Localizer["InternName"]" />
+                            </RadzenFormField>
+                        </RadzenStack>
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="2rem" Class="admin-form-row">
+                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Style="width: 220px;" Class="admin-form-label">
+                                <RadzenText TextStyle="TextStyle.Subtitle2" Class="admin-label" Style="font-weight: bold;">@Localizer["InternId"]</RadzenText>
+                                <i @ref="internIdIcon" class="bi bi-exclamation-circle" style="cursor: help; color: #dc3545;" tabindex="0" aria-label="@Localizer["InternAccountGuidance"]"
+                                   @onmouseenter="ShowInternIdTooltip" @onmouseleave="@(() => tooltipService.Close())"
+                                   @onfocus="ShowInternIdTooltip" @onblur="@(() => tooltipService.Close())"></i>
+                            </RadzenStack>
+                            <RadzenFormField Variant="Variant.Outlined" Style="flex: 1;">
+                                <RadzenTextBox @bind-Value="internAccountSourceId" MaxLength="255" Placeholder="@Localizer["InternId"]" />
+                            </RadzenFormField>
+                        </RadzenStack>
+                        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                            <RadzenButton Text="@Localizer[selectedInternAccountId == 0 ? "CreateInternAccount" : "SaveInternAccount"]" Click="@SaveInternAccount" Disabled="@internAccountBusy" />
+                            <RadzenButton Text="@Localizer["DeleteInternAccount"]" ButtonStyle="ButtonStyle.Danger" Click="@DeleteInternAccount" Disabled="@(internAccountBusy || selectedInternAccountId == 0)" />
+                        </RadzenStack>
+                        @if (!string.IsNullOrWhiteSpace(internAccountMessage))
+                        {
+                            <div role="status">@internAccountMessage</div>
+                        }
+                    }
+                    else if (!createSubFund)
                     {
                         <!-- Fundraising Account selector -->
                         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="2rem" Class="admin-form-row">
@@ -243,7 +291,7 @@
                                         <RadzenText TextStyle="TextStyle.Subtitle2" Class="admin-label" Style="font-weight: bold; width: 220px;">@Localizer["PrimaryAccount"]</RadzenText>
                                         <RadzenFormField Variant="Variant.Outlined" Style="flex: 1;">
                                             <CustomDropdown TItem="Account" TValue="int"
-                                                            Data="@accountsOptions"
+                                                            Data="@(allAccounts.Where(account => account.AccountKind != "Intern"))"
                                                              TextSelector="@(a => a.AccountId == 0 ? Localizer["SelectAccount"].Value : InternAccountUtility.GetAccountSelectorDisplayName(a.Fund))"
                                                             ValueSelector="@(a => a.AccountId)"
                                                             Value="@selectedPrincipleAccountId"
@@ -351,13 +399,14 @@
             }
         </RadzenCard>
 
-         @* One-time local account import section temporarily disabled.
+         @* Temporarily disabled bulk account and user import paths.
          <RadzenCard>
              <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Gap="0.5rem" Class="rz-mt-1 rz-mb-4">
-                 <RadzenText TextStyle="TextStyle.H5" Style="font-weight: 800; color: #1f2937;">Import Accounts from Local Excel</RadzenText>
-                 <RadzenButton Text="Load Preview" ButtonStyle="ButtonStyle.Primary" Click="LoadAccountImportPreview" Disabled="@accountImportBusy" />
+                 <RadzenText TextStyle="TextStyle.H5" Style="font-weight: 800; color: #1f2937;">Import Accounts from Excel</RadzenText>
+                 <RadzenButton Text="Load Preview" ButtonStyle="ButtonStyle.Primary" Click="LoadAccountImportPreview" Disabled="@(accountImportBusy || accountImportWorkbook is null)" />
              </RadzenStack>
-             <RadzenText TextStyle="TextStyle.Body2">Place one .xlsx file containing Account Number, Fund, Class, and Overhead in the AccountImports folder, then load the preview.</RadzenText>
+             <RadzenText TextStyle="TextStyle.Body2">Select an .xlsx workbook with fund, fund#, and overhead columns, then load the preview. The class column is optional. Maximum file size: 10 MB.</RadzenText>
+              <InputFile OnChange="OnAccountImportFileChange" accept=".xlsx" disabled="@accountImportBusy" />
              @if (accountImportBusy)
              {
                  <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Class="rz-mt-3" />
@@ -382,6 +431,38 @@
                  </div>
                  <RadzenButton Text="Create Accounts" ButtonStyle="ButtonStyle.Primary" Class="rz-mt-3" Click="ImportAccounts" Disabled="@(!accountImportPreview.CanImport || accountImportBusy)" />
              }
+         </RadzenCard>
+
+        <RadzenCard>
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" JustifyContent="JustifyContent.SpaceBetween" Gap="0.5rem" Class="rz-mt-1 rz-mb-4">
+                <RadzenText TextStyle="TextStyle.H5">Import Users from Excel</RadzenText>
+                <RadzenButton Text="Load Preview" ButtonStyle="ButtonStyle.Primary" Click="LoadUserImportPreview" Disabled="@(userImportBusy || userImportWorkbook is null)" />
+            </RadzenStack>
+            <RadzenText TextStyle="TextStyle.Body2">Select an .xlsx workbook with User and Level columns. Account access is assigned separately. Maximum file size: 10 MB.</RadzenText>
+            <InputFile OnChange="OnUserImportFileChange" accept=".xlsx" disabled="@userImportBusy" />
+            @if (userImportBusy)
+            {
+                <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" Class="rz-mt-3" />
+            }
+            @if (!string.IsNullOrWhiteSpace(userImportMessage))
+            {
+                <RadzenAlert AlertStyle="@(userImportSuccess || userImportPreview?.CanImport == true ? AlertStyle.Success : AlertStyle.Danger)" ShowIcon="true" Variant="Variant.Filled" Class="rz-mt-3">@userImportMessage</RadzenAlert>
+            }
+            @if (userImportPreview is not null && userImportPreview.Rows.Count > 0)
+            {
+                <div style="overflow-x:auto; max-height:360px;">
+                    <table class="rz-grid-table rz-grid-table-striped" style="width:100%;">
+                        <thead><tr><th>Row</th><th>Email</th><th>Name</th><th>Role</th></tr></thead>
+                        <tbody>
+                        @foreach (var row in userImportPreview.Rows)
+                        {
+                            <tr><td>@row.RowNumber</td><td>@row.Email</td><td>@row.Name</td><td>@row.AuthLevel</td></tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                <RadzenButton Text="Create Users" ButtonStyle="ButtonStyle.Primary" Class="rz-mt-3" Click="ImportUsers" Disabled="@(!userImportPreview.CanImport || userImportBusy)" />
+            }
          </RadzenCard>
          *@
 
@@ -419,7 +500,10 @@
                             <div class="rz-border-radius-1 rz-border-1" style="height: 38px; display: grid; align-items: center; justify-items: start; background-color: #f0f0f0; padding: 0 0.5rem;">
                                 <RadzenText TextStyle="TextStyle.Body1" Style="margin:0;">@(string.IsNullOrEmpty(selectedStaffEmail) ? @Localizer["NoUserSelected"] : selectedStaffEmail)</RadzenText>
                             </div>
-                            <RadzenTextBox @bind-value="@newEmail" Placeholder="@Localizer["EnterUpdateEmail"]" />
+                            <div style="display:flex; align-items:center; gap:0.35rem; min-width:0;">
+                                <RadzenTextBox @bind-value="@newEmail" Placeholder="@Localizer["EnterUpdateEmail"]" aria-label="@Localizer["EnterUpdateEmail"]" Style="min-width:0; width:100%;" />
+                                <span style="white-space:nowrap;">@Cya2.Application.Services.UserManagementService.OrganizationEmailDomain</span>
+                            </div>
                         </RadzenStack>
                     </div>
                 </RadzenStack>
@@ -433,7 +517,7 @@
                                 <RadzenText TextStyle="TextStyle.Body1" Style="margin:0;">@(string.IsNullOrEmpty(selectedStaffAuthLevel) ? @Localizer["NoUserSelected"] : selectedStaffAuthLevel)</RadzenText>
                             </div>
                             <div style="width:100%;">
-                                <CustomDropdown TItem="string" TValue="string" Data="@authLevels" TextSelector="@(s => s)" ValueSelector="@(s => s)" Value="@newAuthLevel" ValueChanged="@(async (string v) => newAuthLevel = v)" Placeholder="@Localizer["SelectAuthLevel"]" />
+                                <CustomDropdown @key="selectedStaffId" TItem="string" TValue="string" Data="@authLevels" TextSelector="@(s => s)" ValueSelector="@(s => s)" Value="@newAuthLevel" ValueChanged="@(async (string v) => newAuthLevel = v)" Placeholder="@Localizer["SelectAuthLevel"]" />
                             </div>
                         </RadzenStack>
                     </div>
@@ -445,10 +529,10 @@
                         <RadzenStack Orientation="Orientation.Vertical" Gap="0.75rem">
                             <RadzenText TextStyle="TextStyle.Subtitle2" Style="font-weight: bold; margin:0;">@Localizer["FundAccess"]</RadzenText>
                             <div style="width:100%;">
-                                <CustomDropdown TItem="Account" TValue="int" Data="@accountsOptions" TextSelector="@(a => a.AccountId == 0 ? Localizer["GrantFundAccess"].Value : InternAccountUtility.GetAccountSelectorDisplayName(a.Fund))" ValueSelector="@(a => a.AccountId)" Value="@accountToAddId" ValueChanged="@(async (int v) => accountToAddId = v)" Placeholder="@Localizer["GrantFundAccess"]" Searchable="true" SearchPlaceholder="@Localizer["Search"]" />
+                                <CustomDropdown TItem="Account" TValue="int" Data="@accountsOptions" TextSelector="@(a => a.AccountId == 0 ? Localizer["GrantFundAccess"].Value : InternAccountUtility.GetAccountSelectorDisplayName(a))" ValueSelector="@(a => a.AccountId)" Value="@accountToAddId" ValueChanged="@(async (int v) => accountToAddId = v)" Placeholder="@Localizer["GrantFundAccess"]" Searchable="true" SearchPlaceholder="@Localizer["Search"]" />
                             </div>
                             <div style="width:100%;">
-                                <CustomDropdown TItem="Account" TValue="int" Data="@userAccounts" TextSelector="@(a => a.AccountId == 0 ? Localizer["RemoveFundAccess"].Value : InternAccountUtility.GetAccountSelectorDisplayName(a.Fund))" ValueSelector="@(a => a.AccountId)" Value="@selectedLinkedAccountId" ValueChanged="@(async (int v) => selectedLinkedAccountId = v)" Placeholder="@Localizer["RemoveFundAccess"]" Searchable="true" SearchPlaceholder="@Localizer["Search"]" />
+                                <CustomDropdown TItem="Account" TValue="int" Data="@userAccounts" TextSelector="@(a => a.AccountId == 0 ? Localizer["RemoveFundAccess"].Value : InternAccountUtility.GetAccountSelectorDisplayName(a))" ValueSelector="@(a => a.AccountId)" Value="@selectedLinkedAccountId" ValueChanged="@(async (int v) => selectedLinkedAccountId = v)" Placeholder="@Localizer["RemoveFundAccess"]" Searchable="true" SearchPlaceholder="@Localizer["Search"]" />
                             </div>
                         </RadzenStack>
                     </div>
@@ -474,7 +558,7 @@
                                         @foreach (var account in userAccounts.Where(a => a.AccountId != 0))
                                         {
                                             <li style="padding: 0.25rem 0; border-bottom: 1px solid #eee;">
-                                                <RadzenText TextStyle="TextStyle.Body1">@InternAccountUtility.GetAccountSelectorDisplayName(account.Fund)</RadzenText>
+                                                <RadzenText TextStyle="TextStyle.Body1">@InternAccountUtility.GetAccountSelectorDisplayName(account)</RadzenText>
                                             </li>
                                         }
                                     </ul>
@@ -605,7 +689,7 @@
 
                 if (string.IsNullOrWhiteSpace(raw))
                 {
-                    NotificationService.Notify(new NotificationMessage
+                    NotifyAdmin(new NotificationMessage
                     {
                         Severity = NotificationSeverity.Error,
                         Summary = Localizer["UploadError"],
@@ -622,7 +706,7 @@
 
                 if (preview == null || string.IsNullOrWhiteSpace(preview.PreviewId))
                 {
-                    NotificationService.Notify(new NotificationMessage
+                    NotifyAdmin(new NotificationMessage
                     {
                         Severity = NotificationSeverity.Error,
                         Summary = Localizer["UploadError"],
@@ -632,78 +716,93 @@
                     return;
                 }
 
-                // Show confirmation dialog
-                var confirmed = await DialogService.OpenAsync<UploadConfirmationDialog>(
-                    title: Localizer["ConfirmUpload"],
-                    parameters: new Dictionary<string, object?> { { "Preview", preview } },
-                    options: BuildAdminDialogOptions(width: "520px", height: "auto", resizable: false, showClose: true, closeDialogOnOverlayClick: false));
-
-                if (confirmed is bool b && b)
-                {
-                    await StartImportFromPreview(preview.PreviewId, importType);
-                }
-                else
-                {
-                    _logger.LogInformation("User cancelled {Type} upload for PreviewId {PreviewId}", importType, preview.PreviewId);
-                }
+                await ShowUploadConfirmationAsync(preview, importType);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "HandlePreviewComplete failed for {Type}", importType);
-                NotificationService.Notify(new NotificationMessage
+                _logger.LogError("HandlePreviewComplete failed for {Type}. ExceptionType={ExceptionType}", importType, ex.GetType().Name);
+                NotifyAdmin(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Error,
                     Summary = Localizer["UploadError"],
-                    Detail = ex.Message,
+                    Detail = Localizer["SafeOperationError"],
                     Duration = 4000
                 });
             }
         }
 
-        private async Task StartImportFromPreview(string previewId, string importType)
+        private async Task ShowUploadConfirmationAsync(FilePreviewResult? preview, string importType, Func<Task<FilePreviewResult>>? preparePreview = null)
+        {
+            var progressId = Guid.NewGuid().ToString("N");
+            var submitted = false;
+            var options = BuildAdminDialogOptions(width: "520px", height: "auto", resizable: false, showClose: preparePreview is null, closeDialogOnOverlayClick: false);
+            if (preparePreview is not null)
+            {
+                options.CloseDialogOnEsc = false;
+                options.ShowTitle = false;
+            }
+
+            var confirmed = await DialogService.OpenAsync<UploadConfirmationDialog>(
+                title: Localizer["ConfirmUpload"],
+                parameters: new Dictionary<string, object?>
+                {
+                    { "Preview", preview },
+                    { "PreparePreview", preparePreview is null ? null : (Func<Task<FilePreviewResult>>)(async () =>
+                        {
+                            try
+                            {
+                                return preview = await preparePreview();
+                            }
+                            finally
+                            {
+                                options.ShowTitle = true;
+                                DialogService.Refresh();
+                            }
+                        }) },
+                    { "ProgressId", progressId },
+                    { "SubmitImport", (Func<Task>)(async () =>
+                        {
+                            if (preview is null) return;
+                            submitted = true;
+                            await SubmitImportFromPreview(preview.PreviewId, importType, preview.RequiresOldDateAcknowledgment, progressId);
+                        }) }
+                },
+                options: options);
+
+            if (confirmed is bool b && b)
+            {
+                _logger.LogInformation("Upload dialog completed for {Type}", importType);
+            }
+            else
+            {
+                if (!submitted && preview is not null) await ImportOrchestrationService.DiscardPreviewAsync(preview.PreviewId, importType);
+                _logger.LogInformation("Upload dialog closed for {Type}", importType);
+            }
+        }
+
+        private async Task SubmitImportFromPreview(string previewId, string importType, bool oldDateAcknowledged, string progressId)
         {
             try
             {
-                // Open the progress dialog immediately
-                DialogService.Open<UploadProgressDialog>(
-                    title: Localizer["UploadInProgress"],
-                    // Do not pass ProgressId here - the dialog will pick it up from SessionImportProgressService.ImportProgressIdChanged
-                    parameters: new Dictionary<string, object?>(),
-                    options: BuildAdminDialogOptions(width: "800px", height: "auto", resizable: false, showClose: true, closeDialogOnOverlayClick: false));
-                // Let the UI render the dialog and let the dialog component initialize and start polling
-                await InvokeAsync(StateHasChanged);
-
                 // Call the import service directly
                 ImportResult result;
                 if (importType == "donations")
                 {
-                    result = await ImportOrchestrationService.StartImportFromPreviewAsync(previewId, "donations");
+                    result = await ImportOrchestrationService.StartImportFromPreviewAsync(previewId, "donations", oldDateAcknowledged, progressId);
                 }
                 else if (importType == "accounting")
                 {
-                    result = await ImportOrchestrationService.StartImportFromPreviewAsync(previewId, "accounting");
+                    result = await ImportOrchestrationService.StartImportFromPreviewAsync(previewId, "accounting", false, progressId);
                 }
                 else
                 {
                     throw new ArgumentException("Invalid import type");
                 }
 
-                AdminPreloadService.Invalidate();
-                AccountSnapshotWarmupService.Invalidate();
-                ImportCacheInvalidator.InvalidateAll();
-
-                if (result == null || string.IsNullOrWhiteSpace(result.ProgressId))
+                if (result == null || result.Errors.Count > 0 || string.IsNullOrWhiteSpace(result.ProgressId))
                 {
-                    NotificationService.Notify(new NotificationMessage
-                    {
-                        Severity = NotificationSeverity.Error,
-                        Summary = Localizer["ImportError"],
-                        Detail = Localizer["ImportProgressIdMissing"],
-                        Duration = 4000
-                    });
-
-                    SessionImportProgressService.SetImportProgressId(string.Empty);
-                    return;
+                    throw new Cya2.Application.Services.ImportUploadValidationException(
+                        result?.Errors.Count > 0 ? string.Join(Environment.NewLine, result.Errors) : Localizer["ImportProgressIdMissing"].Value);
                 }
 
                 SessionImportProgressService.SetImportProgressId(result.ProgressId);
@@ -715,14 +814,15 @@
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "StartImportFromPreview failed for {Type}", importType);
-                NotificationService.Notify(new NotificationMessage
+                _logger.LogError("StartImportFromPreview failed for {Type}. ExceptionType={ExceptionType}", importType, ex.GetType().Name);
+                NotifyAdmin(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Error,
                         Summary = Localizer["ImportError"],
-                    Detail = ex.Message,
+                    Detail = cya2.Services.AdminNotificationPolicy.UploadErrorDetail(ex, Localizer),
                     Duration = 4000
                 });
+                throw;
             }
         }
 
@@ -736,23 +836,23 @@
                 if (file == null) return;
 
                 const long maxAllowedBytes = 5_000L * 1024;
-                await using var stream = file.OpenReadStream(maxAllowedBytes);
-
-                var preview = await ImportOrchestrationService.PreviewAsync(
-                    stream, "donations", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
-
-                var raw = System.Text.Json.JsonSerializer.Serialize(preview);
-                var args = new UploadCompleteEventArgs { RawResponse = raw };
-                await HandlePreviewComplete(args, "donations");
+                if (file.Size > maxAllowedBytes)
+                    throw new Cya2.Application.Services.ImportUploadValidationException(Localizer["UploadFileTooLarge", maxAllowedBytes / 1024].Value);
+                await ShowUploadConfirmationAsync(null, "donations", async () =>
+                {
+                    await using var stream = file.OpenReadStream(maxAllowedBytes);
+                    return await ImportOrchestrationService.PreviewAsync(
+                        stream, "donations", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Donation file upload failed");
-                NotificationService.Notify(new NotificationMessage
+                _logger.LogError("Donation file upload failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+                NotifyAdmin(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Error,
                     Summary = Localizer["UploadError"],
-                    Detail = "The upload could not be validated. Select a valid .xlsx workbook no larger than 5,000 KB.",
+                    Detail = cya2.Services.AdminNotificationPolicy.UploadErrorDetail(ex, Localizer),
                     Duration = 4000
                 });
             }
@@ -766,23 +866,23 @@
                 if (file == null) return;
 
                 const long maxAllowedBytes = 5_000L * 1024;
-                await using var stream = file.OpenReadStream(maxAllowedBytes);
-
-                var preview = await ImportOrchestrationService.PreviewAsync(
-                    stream, "accounting", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
-
-                var raw = System.Text.Json.JsonSerializer.Serialize(preview);
-                var args = new UploadCompleteEventArgs { RawResponse = raw };
-                await HandlePreviewComplete(args, "accounting");
+                if (file.Size > maxAllowedBytes)
+                    throw new Cya2.Application.Services.ImportUploadValidationException(Localizer["UploadFileTooLarge", maxAllowedBytes / 1024].Value);
+                await ShowUploadConfirmationAsync(null, "accounting", async () =>
+                {
+                    await using var stream = file.OpenReadStream(maxAllowedBytes);
+                    return await ImportOrchestrationService.PreviewAsync(
+                        stream, "accounting", file.Name, file.ContentType ?? string.Empty, CancellationToken.None);
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Accounting file upload failed");
-                NotificationService.Notify(new NotificationMessage
+                _logger.LogError("Accounting file upload failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+                NotifyAdmin(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Error,
                     Summary = Localizer["UploadError"],
-                    Detail = "The upload could not be validated. Select a valid .xlsx workbook no larger than 5,000 KB.",
+                    Detail = cya2.Services.AdminNotificationPolicy.UploadErrorDetail(ex, Localizer),
                     Duration = 4000
                 });
             }
@@ -799,6 +899,7 @@
         private ElementReference fundIcon;
         private ElementReference subFundIcon;
         private ElementReference classIcon;
+        private ElementReference internIdIcon;
 
         private string? staffMember;
         private int selectedStaffId;
@@ -808,7 +909,7 @@
         private string selectedStaffEmail = string.Empty;
         private string selectedStaffAuthLevel = string.Empty;
         private string newAuthLevel = string.Empty;
-        private List<string> authLevels = new List<string> { "User", "Intern", "Viewer", "Admin" };
+        private List<string> authLevels = new List<string> { "User", "Viewer", "Admin" };
 
         private string selectedStaff = string.Empty;
         public string newName = string.Empty;
@@ -850,7 +951,7 @@
                 DisplayText = AddNewAccountLabel 
             } }
             .Concat(allFunds
-                .Where(f => f.AccountId != 0)  // Exclude any zero IDs from allFunds
+                .Where(f => f.AccountId != 0 && !InternAccountUtility.IsInternFund(f.Fund))
                 .OrderBy(f => InternAccountUtility.GetAccountSelectorSortKey(f.Fund), StringComparer.OrdinalIgnoreCase)
                 .Select(f => new FundDisplayItem { 
                     Account = f,
@@ -872,11 +973,74 @@
         private string fundUpdateSuccess = string.Empty;
 
         private Cya2.Application.DTOs.AccountImportPreviewDto? accountImportPreview;
+        private byte[]? accountImportWorkbook;
+        private string? accountImportFileName;
         private string accountImportMessage = string.Empty;
         private bool accountImportBusy { get; set; }
+        private UserImportPreviewDto? userImportPreview;
+        private byte[]? userImportWorkbook;
+        private string? userImportFileName;
+        private string userImportMessage = string.Empty;
+        private bool userImportBusy;
+        private bool userImportSuccess;
+        private const long MaxBulkImportFileSize = 10 * 1024 * 1024;
 
         // New UI-only state for fund creation toggle and subfund inputs
-        private bool createSubFund = false;
+        private string accountManagementMode = "Primary";
+        private bool createSubFund { get => accountManagementMode == "Sub"; set => accountManagementMode = value ? "Sub" : "Primary"; }
+        private int selectedInternAccountId;
+        private string internAccountName = string.Empty;
+        private string internAccountSourceId = string.Empty;
+        private string internAccountMessage = string.Empty;
+        private bool internAccountBusy;
+        private IEnumerable<Account> internAccountOptions => new[] { new Account { DisplayName = AddNewAccountLabel } }
+            .Concat(allAccounts.Where(account => account.AccountKind == "Intern").OrderBy(account => account.DisplayName));
+
+        private void SelectInternAccount(object value)
+        {
+            selectedInternAccountId = value is int id ? id : 0;
+            var account = allAccounts.FirstOrDefault(account => account.AccountId == selectedInternAccountId);
+            internAccountName = account?.DisplayName ?? string.Empty;
+            internAccountSourceId = account?.InternSourceId ?? string.Empty;
+            internAccountMessage = string.Empty;
+        }
+
+        private async Task SaveInternAccount()
+        {
+            if (internAccountBusy) return;
+            internAccountBusy = true;
+            try
+            {
+                var saved = await InternAccountService.SaveAsync(selectedInternAccountId == 0 ? null : selectedInternAccountId, internAccountName, internAccountSourceId);
+                allAccounts = (await AdminPreloadService.GetAccountsAsync()).ToList();
+                allFunds = allAccounts;
+                selectedInternAccountId = saved.AccountId;
+                RefreshAccountsOptions();
+                internAccountMessage = Localizer["InternAccountSaved"];
+            }
+            catch { internAccountMessage = Localizer["InternAccountSaveFailed"]; }
+            finally { internAccountBusy = false; }
+        }
+
+        private async Task DeleteInternAccount()
+        {
+            if (internAccountBusy || selectedInternAccountId == 0) return;
+            if (await DialogService.Confirm(Localizer["DeleteInternAccountConfirmation"], Localizer["DeleteInternAccount"],
+                new ConfirmOptions { OkButtonText = Localizer["DeleteInternAccount"], CancelButtonText = Localizer["Cancel"] }) != true) return;
+            internAccountBusy = true;
+            try
+            {
+                await InternAccountService.DeleteAsync(selectedInternAccountId);
+                allAccounts = (await AdminPreloadService.GetAccountsAsync()).ToList();
+                allFunds = allAccounts;
+                SelectInternAccount(0);
+                userAccounts.RemoveAll(account => account.AccountId != 0 && allAccounts.All(current => current.AccountId != account.AccountId));
+                RefreshAccountsOptions();
+                internAccountMessage = Localizer["InternAccountDeleted"];
+            }
+            catch { internAccountMessage = Localizer["InternAccountDeleteFailed"]; }
+            finally { internAccountBusy = false; }
+        }
         private decimal? overheadValue = 0.00m;
         private int selectedPrincipleAccountId = 0;
         private string subAccountNameEdit = string.Empty;
@@ -933,8 +1097,8 @@
             }
             catch (Exception ex)
             {
-                errorMessage = $"Error initializing admin page: {ex.Message}";
-                _logger.LogError(ex, "Error initializing admin page");
+                errorMessage = Localizer["SafeOperationError"];
+                _logger.LogError("Error initializing admin page. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
         }
 
@@ -983,8 +1147,8 @@
             }
             catch (Exception ex)
             {
-                errorMessage = $"Error initializing admin page: {ex.Message}";
-                _logger.LogError(ex, "Error initializing Admin data after first render");
+                errorMessage = Localizer["SafeOperationError"];
+                _logger.LogError("Error initializing admin data. ExceptionType={ExceptionType}", ex.GetType().Name);
                 await InvokeAsync(StateHasChanged);
             }
         }
@@ -1067,6 +1231,8 @@
 
         private async Task staffSelectionById(int userId)
         {
+            newAuthLevel = string.Empty;
+            newEmail = string.Empty;
             selectedStaffId = userId;
             var selectedUser = staff.FirstOrDefault(user => user.Id == userId);
             if (selectedUser is null)
@@ -1105,9 +1271,9 @@
 
                 RefreshAccountsOptions();
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                accountLinkError = $"Error loading user accounts: {ex.Message}";
+                accountLinkError = Localizer["SafeOperationError"];
             }
         }
 
@@ -1155,9 +1321,9 @@
                     NotifyMutation(NotificationSeverity.Error, "Account access update failed", op.Message);
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                accountLinkError = $"Error linking account: {ex.Message}";
+                accountLinkError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "Account access update failed", accountLinkError);
             }
         }
@@ -1207,9 +1373,9 @@
                     NotifyMutation(NotificationSeverity.Error, "Account access update failed", op.Message);
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                accountLinkError = $"Error removing account link: {ex.Message}";
+                accountLinkError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "Account access update failed", accountLinkError);
             }
         }
@@ -1228,23 +1394,18 @@
 
             try
             {
+                if (!Cya2.Application.Services.UserManagementService.TryBuildOrganizationEmail(newEmail, out var email))
+                {
+                    staffUpdateError = Localizer["OrganizationEmailUsernameRequired"];
+                    return;
+                }
+
                 var levelToSet = string.IsNullOrWhiteSpace(newAuthLevel) ? "User" : newAuthLevel;
                 var op = await UserManagementService.CreateAdminUserAsync(
                     newName,
-                    newEmail,
+                    email,
                     levelToSet,
                     accountsToAssign);
-
-                if (op.RequiresInternAccountReuse && await ConfirmInternAccountReuseAsync())
-                {
-                    // Retry only after confirmation so a recreated intern user does not silently receive a retained account's history.
-                    op = await UserManagementService.CreateAdminUserAsync(
-                        newName,
-                        newEmail,
-                        levelToSet,
-                        accountsToAssign,
-                        reuseExistingInternAccount: true);
-                }
 
                 if (!op.IsSuccess)
                 {
@@ -1275,9 +1436,9 @@
                 selectedStaffEmail = string.Empty;
                 selectedStaffAuthLevel = string.Empty;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                staffUpdateError = $"Error: {ex.Message}";
+                staffUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "User creation failed", staffUpdateError);
             }
         }
@@ -1311,9 +1472,21 @@
                     return;
                 }
 
-                var successMessages = new List<string>();
-                var errorMessages = new List<string>();
-                var profileUpdated = false;
+                string? updatedEmail = null;
+                if (!string.IsNullOrWhiteSpace(newEmail))
+                {
+                    if (!Cya2.Application.Services.UserManagementService.TryBuildOrganizationEmail(newEmail, out var email))
+                    {
+                        staffUpdateError = Localizer["OrganizationEmailUsernameRequired"];
+                        return;
+                    }
+                    updatedEmail = email;
+                }
+                else if (!Cya2.Application.Services.UserManagementService.IsOrganizationEmail(selectedUser.Email))
+                {
+                    staffUpdateError = Localizer["OrganizationEmailUsernameRequired"];
+                    return;
+                }
 
                 var hasProfileChanges = !string.IsNullOrWhiteSpace(newName)
                                         || !string.IsNullOrWhiteSpace(newEmail)
@@ -1327,75 +1500,25 @@
                     return;
                 }
 
-                if (hasProfileChanges)
+                var request = new Cya2.Application.DTOs.AdminUserUpdateDto
                 {
-                    var request = new Cya2.Application.DTOs.AdminUserUpdateDto
-                    {
-                        UserId = selectedUser.Id,
-                        Name = string.IsNullOrWhiteSpace(newName) ? null : newName,
-                        Email = string.IsNullOrWhiteSpace(newEmail) ? null : newEmail,
-                        AuthLevel = string.IsNullOrWhiteSpace(newAuthLevel) ? null : newAuthLevel
-                    };
-
-                    var profileOp = await UserManagementService.UpdateAdminUserAsync(request);
-                    if (profileOp.RequiresInternAccountReuse && await ConfirmInternAccountReuseAsync())
-                    {
-                        // A renamed intern may collide with retained history; retry only after the Admin selects reuse.
-                        request.ReuseExistingInternAccount = true;
-                        profileOp = await UserManagementService.UpdateAdminUserAsync(request);
-                    }
-                    if (profileOp.IsSuccess)
-                    {
-                        successMessages.Add(profileOp.Message);
-                        NotifyMutation(NotificationSeverity.Success, "User updated", profileOp.Message);
-                        profileUpdated = true;
-                    }
-                    else
-                    {
-                        errorMessages.Add(profileOp.Message);
-                        NotifyMutation(NotificationSeverity.Error, "User update failed", profileOp.Message);
-                    }
+                    UserId = selectedUser.Id,
+                    Name = string.IsNullOrWhiteSpace(newName) ? null : newName,
+                    Email = updatedEmail,
+                    AuthLevel = string.IsNullOrWhiteSpace(newAuthLevel) ? null : newAuthLevel,
+                    GrantAccountId = hasGrantChange ? accountToAddId : null,
+                    RevokeAccountId = hasRevokeChange ? selectedLinkedAccountId : null
+                };
+                var operation = await UserManagementService.UpdateAdminUserAsync(request);
+                if (!operation.IsSuccess)
+                {
+                    staffUpdateError = operation.Message;
+                    NotifyMutation(NotificationSeverity.Error, "User update failed", operation.Message);
+                    return;
                 }
 
-                if (hasGrantChange)
-                {
-                    var grantOp = await UserManagementService.GrantAccountAccessAsync(selectedUser.Id, accountToAddId);
-                    if (grantOp.IsSuccess)
-                    {
-                        successMessages.Add(grantOp.Message);
-                        NotifyMutation(NotificationSeverity.Success, "Account access updated", grantOp.Message);
-                    }
-                    else
-                    {
-                        errorMessages.Add(grantOp.Message);
-                        NotifyMutation(NotificationSeverity.Error, "Account access update failed", grantOp.Message);
-                    }
-                }
-
-                if (hasRevokeChange)
-                {
-                    var revokeOp = await UserManagementService.RevokeAccountAccessAsync(selectedUser.Id, selectedLinkedAccountId);
-                    if (revokeOp.IsSuccess)
-                    {
-                        successMessages.Add(revokeOp.Message);
-                        NotifyMutation(NotificationSeverity.Success, "Account access updated", revokeOp.Message);
-                    }
-                    else
-                    {
-                        errorMessages.Add(revokeOp.Message);
-                        NotifyMutation(NotificationSeverity.Error, "Account access update failed", revokeOp.Message);
-                    }
-                }
-
-                if (successMessages.Any())
-                {
-                    staffUpdateSuccess = string.Join(" ", successMessages);
-                }
-
-                if (errorMessages.Any())
-                {
-                    staffUpdateError = string.Join(" ", errorMessages);
-                }
+                staffUpdateSuccess = operation.Message;
+                NotifyMutation(NotificationSeverity.Success, "User updated", operation.Message);
 
                 // Clear editing inputs and account action selections after attempting update
                 newName = string.Empty;
@@ -1406,7 +1529,7 @@
 
                 await LoadAllStaff();
 
-                if (profileUpdated)
+                if (hasProfileChanges)
                 {
                     // A successful intern profile update can rename or relink its automatic account.
                     AdminPreloadService.Invalidate();
@@ -1420,9 +1543,9 @@
                 staffMember = refreshedUser?.Name ?? staffMember;
                 await staffSelection(staffMember);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                staffUpdateError = $"Error updating user: {ex.Message}";
+                staffUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "User update failed", staffUpdateError);
             }
         }
@@ -1443,7 +1566,7 @@
                 if (confirmed != true)
                     return;
 
-                _logger.LogInformation("Confirming deletion of user: {User}", userName);
+                _logger.LogInformation("Confirming user deletion.");
 
                 var selectedUser = staff.FirstOrDefault(u => u.Name == userName);
                 if (selectedUser == null)
@@ -1456,7 +1579,7 @@
                 var op = await UserManagementService.DeleteAdminUserAsync(selectedUser.Id);
                 if (op.IsSuccess)
                 {
-                    _logger.LogInformation("Successfully deleted user {UserId}", selectedUser.Id);
+                    _logger.LogInformation("Successfully deleted user.");
                     staffUpdateSuccess = op.Message;
                     NotifyMutation(NotificationSeverity.Success, "User deleted", op.Message);
 
@@ -1474,7 +1597,7 @@
                 }
                 else
                 {
-                    _logger.LogWarning("Failed to delete user {UserId}: {Message}", selectedUser.Id, op.Message);
+                    _logger.LogWarning("User deletion failed.");
                     staffUpdateError = op.Message;
                     NotifyMutation(NotificationSeverity.Error, "User deletion failed", op.Message);
                 }
@@ -1483,24 +1606,11 @@
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in ConfirmDelete");
-                staffUpdateError = $"Error: {ex.Message}";
+                _logger.LogError("Error in user deletion. ExceptionType={ExceptionType}", ex.GetType().Name);
+                staffUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "User deletion failed", staffUpdateError);
                 StateHasChanged();
             }
-        }
-
-        private async Task<bool> ConfirmInternAccountReuseAsync()
-        {
-            var result = await DialogService.OpenAsync<RollbackConfirmDialog>(
-                "Reuse Intern Account",
-                new Dictionary<string, object?>
-                {
-                    ["Message"] = "An intern account already exists for this name. Select OK to link this user to the existing account, or Cancel to modify the user name."
-                },
-                BuildAdminDialogOptions(width: "460px", closeDialogOnOverlayClick: false));
-
-            return result == true;
         }
 
         private async Task ConfirmDeleteFund(int accountId)
@@ -1541,9 +1651,9 @@
                 selectedFund = AddNewAccountLabel;
                 await fundSelection(selectedFund);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                fundUpdateError = $"Error deleting fund: {ex.Message}";
+                fundUpdateError = Localizer["SafeOperationError"];
             }
         }
 
@@ -1552,7 +1662,7 @@
             fundUpdateError = string.Empty;
             fundUpdateSuccess = string.Empty;
 
-            _logger.LogInformation("UpdateFund called. SelectedFund: {SelectedFund}, IsAddNewAccountSelected: {IsAddNewAccountSelected}", selectedFund, IsAddNewAccountSelected);
+            _logger.LogInformation("UpdateFund called. IsAddNewAccountSelected={IsAddNewAccountSelected}", IsAddNewAccountSelected);
 
             if (IsAddNewAccountSelected)
             {
@@ -1601,9 +1711,9 @@
             }
             catch (Exception ex)
             {
-                fundUpdateError = $"Error updating fund: {ex.Message}";
+                fundUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "Fund update failed", fundUpdateError);
-                _logger.LogError(ex, "Error updating fund: {SelectedFund}", selectedFund);
+                _logger.LogError("Error updating fund. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
         }
 
@@ -1672,9 +1782,9 @@
                 }
                 catch (Exception ex)
                 {
-                    fundUpdateError = $"Error adding sub fund: {ex.Message}";
+                    fundUpdateError = Localizer["SafeOperationError"];
                     NotifyMutation(NotificationSeverity.Error, "Sub-fund creation failed", fundUpdateError);
-                    _logger.LogError(ex, "Error adding sub fund: {SubFundName}", subAccountNameEdit);
+                    _logger.LogError("Error adding sub fund. ExceptionType={ExceptionType}", ex.GetType().Name);
                 }
 
                 return;
@@ -1743,9 +1853,9 @@
             }
             catch (Exception ex)
             {
-                fundUpdateError = $"Error adding new fund: {ex.Message}";
+                fundUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "Fund creation failed", fundUpdateError);
-                _logger.LogError(ex, "Error adding new fund: {FundName}", newFundName);
+                _logger.LogError("Error adding new fund. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
         }
         
@@ -1844,28 +1954,109 @@
             }
             catch (Exception ex)
             {
-                errorMessage = $"Error loading accounts: {ex.Message}";
+                errorMessage = Localizer["SafeOperationError"];
                 allAccounts = new List<Account>();
-                _logger.LogError(ex, "Error loading accounts from database");
+                _logger.LogError("Error loading accounts from database. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
+        }
+
+        private async Task OnAccountImportFileChange(InputFileChangeEventArgs e)
+        {
+            var file = e.File;
+            accountImportWorkbook = null;
+            accountImportFileName = null;
+            accountImportPreview = null;
+            accountImportMessage = string.Empty;
+            accountImportBusy = true;
+            try
+            {
+                if (file.Size > MaxBulkImportFileSize)
+                {
+                    accountImportMessage = "The selected workbook exceeds the 10 MB limit.";
+                    return;
+                }
+
+                accountImportWorkbook = await ReadBulkImportWorkbookAsync(file);
+                accountImportFileName = file.Name;
+            }
+            catch (Exception ex)
+            {
+                accountImportMessage = "The selected workbook could not be uploaded.";
+                _logger.LogError("Account workbook upload failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            }
+            finally
+            {
+                accountImportBusy = false;
+            }
+        }
+
+        private async Task OnUserImportFileChange(InputFileChangeEventArgs e)
+        {
+            var file = e.File;
+            userImportWorkbook = null;
+            userImportFileName = null;
+            userImportPreview = null;
+            userImportSuccess = false;
+            userImportMessage = string.Empty;
+            userImportBusy = true;
+            try
+            {
+                if (file.Size > MaxBulkImportFileSize)
+                {
+                    userImportMessage = "The selected workbook exceeds the 10 MB limit.";
+                    return;
+                }
+
+                userImportWorkbook = await ReadBulkImportWorkbookAsync(file);
+                userImportFileName = file.Name;
+            }
+            catch (Exception ex)
+            {
+                userImportMessage = "The selected workbook could not be uploaded.";
+                _logger.LogError("User workbook upload failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            }
+            finally
+            {
+                userImportBusy = false;
+            }
+        }
+
+        private static async Task<byte[]> ReadBulkImportWorkbookAsync(IBrowserFile file)
+        {
+            await using var stream = file.OpenReadStream(MaxBulkImportFileSize);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            if (buffer.Length > MaxBulkImportFileSize)
+                throw new IOException("The workbook exceeds the upload limit.");
+            return buffer.ToArray();
         }
 
         private async Task LoadAccountImportPreview()
         {
+            var workbook = accountImportWorkbook;
+            var fileName = accountImportFileName;
+            if (workbook is null || fileName is null)
+            {
+                accountImportMessage = "Select an .xlsx workbook first.";
+                accountImportPreview = null;
+                return;
+            }
+
             accountImportBusy = true;
             accountImportMessage = string.Empty;
             accountImportPreview = null;
             try
             {
-                accountImportPreview = await AccountImportService.PreviewAsync();
+                using var stream = new MemoryStream(workbook, writable: false);
+                accountImportPreview = await AccountImportService.PreviewAsync(stream, fileName);
                 accountImportMessage = accountImportPreview.Errors.Count == 0
                     ? "Preview loaded successfully. Review the rows before creating accounts."
                     : string.Join(" ", accountImportPreview.Errors);
             }
             catch (Exception ex)
             {
-                accountImportMessage = $"Account import preview failed: {ex.Message}";
-                _logger.LogError(ex, "Account import preview failed");
+                accountImportMessage = "Unable to load the account workbook preview. Please try again or contact an administrator.";
+                _logger.LogError("Account import preview failed. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
             finally
             {
@@ -1882,23 +2073,71 @@
             accountImportMessage = string.Empty;
             try
             {
-                var result = await AccountImportService.ImportAsync(accountImportPreview.Rows);
+                var result = await AccountImportService.ImportAsync();
                 accountImportMessage = result.Message;
+                accountImportPreview = null;
                 if (result.IsSuccess)
                 {
-                    accountImportPreview = null;
                     await LoadAllAccounts();
                 }
             }
             catch (Exception ex)
             {
-                accountImportMessage = $"Account import failed: {ex.Message}";
-                _logger.LogError(ex, "Account import failed");
+                accountImportMessage = Localizer["SafeOperationError"];
+                _logger.LogError("Account import failed. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
             finally
             {
                 accountImportBusy = false;
             }
+        }
+
+        private async Task LoadUserImportPreview()
+        {
+            var workbook = userImportWorkbook;
+            var fileName = userImportFileName;
+            if (workbook is null || fileName is null)
+            {
+                userImportMessage = "Select an .xlsx workbook first.";
+                userImportPreview = null;
+                return;
+            }
+
+            userImportBusy = true;
+            userImportSuccess = false;
+            userImportPreview = null;
+            try
+            {
+                using var stream = new MemoryStream(workbook, writable: false);
+                userImportPreview = await UserImportService.PreviewAsync(stream, fileName);
+                userImportMessage = userImportPreview.CanImport ? "Review the users before creating them." : string.Join(" ", userImportPreview.Errors);
+            }
+            catch (Exception ex)
+            {
+                userImportMessage = "Unable to load the user workbook preview. Please try again or contact an administrator.";
+                _logger.LogError("User import preview failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            }
+            finally { userImportBusy = false; }
+        }
+
+        private async Task ImportUsers()
+        {
+            if (userImportPreview?.CanImport != true) return;
+            userImportBusy = true;
+            try
+            {
+                var result = await UserImportService.ImportAsync();
+                userImportMessage = result.Message;
+                userImportSuccess = result.IsSuccess;
+                userImportPreview = null;
+                if (result.IsSuccess) await LoadAllStaff();
+            }
+            catch (Exception ex)
+            {
+                userImportMessage = Localizer["SafeOperationError"];
+                _logger.LogError("User import failed. ExceptionType={ExceptionType}", ex.GetType().Name);
+            }
+            finally { userImportBusy = false; }
         }
 
         private async Task LoadAllStaff()
@@ -1931,9 +2170,9 @@
             }
             catch (Exception ex)
             {
-                errorMessage = $"Error loading users: {ex.Message}";
-                staffUpdateError = $"Debug: LoadAllStaff exception: {ex.Message}";
-                _logger.LogError(ex, "Admin.LoadAllStaff failed.");
+                errorMessage = Localizer["SafeOperationError"];
+                staffUpdateError = errorMessage;
+                _logger.LogError("Admin.LoadAllStaff failed. ExceptionType={ExceptionType}", ex.GetType().Name);
                 staff = new List<Cya2.Application.DTOs.AdminUserDto>();
             }
         }
@@ -1955,9 +2194,22 @@
                 Style = "max-width:96vw; max-height:90vh;"
             };
 
+        private readonly List<NotificationMessage> adminErrorNotices = new();
+
+        private void NotifyAdmin(NotificationMessage message)
+        {
+            if (message.Severity is NotificationSeverity.Error or NotificationSeverity.Warning)
+            {
+                adminErrorNotices.Add(cya2.Services.AdminNotificationPolicy.Prepare(message));
+                return;
+            }
+
+            NotificationService.Notify(message);
+        }
+
         private void NotifyMutation(NotificationSeverity severity, string summary, string detail)
         {
-            NotificationService.Notify(new NotificationMessage
+            NotifyAdmin(new NotificationMessage
             {
                 Severity = severity,
                 Summary = summary,
@@ -1979,9 +2231,11 @@
         {
             _logger.LogInformation("Admin dialog button clicked: dialog={Dialog}", "AccountSummaries");
             _logger.LogInformation("Admin dialog opening: dialog={Dialog}", "AccountSummaries");
+            var options = BuildAdminDialogOptions(width: "90vw", height: "auto", resizable: true, showClose: true);
+            options.Style = "max-width:96vw; max-height:96vh;";
             await DialogService.OpenAsync<AccountSummariesView>(
                 title: Localizer["AccountSummaries"],
-                options: BuildAdminDialogOptions(width: "90vw", height: "auto", resizable: true, showClose: true));
+                options: options);
         }
 
         private async Task OpenFundReferencesDialog()
@@ -1992,6 +2246,16 @@
         }
 
         // Tooltip methods
+        void ShowInternIdTooltip()
+        {
+            tooltipService.Open(internIdIcon, Localizer["InternAccountGuidance"].Value, new TooltipOptions
+            {
+                Position = TooltipPosition.Bottom,
+                Duration = 10000,
+                CssClass = "tooltip-attention"
+            });
+        }
+
         void ShowAccountNumberTooltip(ElementReference elementReference, TooltipOptions? options = null) 
         {
             var tooltipOptions = options ?? new TooltipOptions() { 
@@ -2073,9 +2337,9 @@
                 showRollbackDialog = true;
                 StateHasChanged();
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                rollbackError = $"Error checking rollback availability: {ex.Message}";
+                rollbackError = Localizer["SafeOperationError"];
                 showRollbackDialog = true;
             }
         }
@@ -2126,7 +2390,7 @@
 
                 var result = await DonationImportMaintenanceService.RecategorizeAllDonationsAsync(CancellationToken.None);
 
-                NotificationService.Notify(new NotificationMessage
+                NotifyAdmin(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Success,
                     Summary = GetLocalizedString("RecategorizeDonations", "Recategorize Donations"),
@@ -2134,13 +2398,13 @@
                     Duration = 7000
                 });
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                NotificationService.Notify(new NotificationMessage
+                NotifyAdmin(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Error,
                     Summary = GetLocalizedString("RecategorizeDonations", "Recategorize Donations"),
-                    Detail = ex.Message,
+                    Detail = Localizer["SafeOperationError"],
                     Duration = 7000
                 });
             }
@@ -2194,9 +2458,9 @@
                     await ExecuteRollback();
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                rollbackError = $"Rollback failed: {ex.Message}";
+                rollbackError = Localizer["SafeOperationError"];
                 rollbackStatus = string.Empty;
                 StateHasChanged();
             }
@@ -2221,7 +2485,7 @@
                 
                 if (result.Success)
                 {
-                    rollbackStatus = result.Message;
+                    rollbackStatus = string.Join(" ", new[] { result.Message }.Concat(result.Warnings));
                     AdminPreloadService.Invalidate();
                     AccountSnapshotWarmupService.Invalidate();
                     
@@ -2230,24 +2494,26 @@
                     showRollbackDialog = false;
                     
                     // Show success notification
-                    NotificationService.Notify(new NotificationMessage
+                    NotifyAdmin(new NotificationMessage
                     {
-                        Severity = NotificationSeverity.Success,
+                        Severity = result.Warnings.Count == 0 ? NotificationSeverity.Success : NotificationSeverity.Warning,
                         Summary = "Rollback Complete",
-                        Detail = result.Message,
+                        Detail = rollbackStatus,
                         Duration = 8000
                     });
                 }
                 else
                 {
-                    rollbackError = result.ErrorMessage;
+                    rollbackError = string.Join(" ", new[] { result.ErrorMessage }.Concat(result.Warnings));
+                    if (result.ChangesCommitted)
+                        rollbackError = "Some rollback changes were committed. " + rollbackError;
                     rollbackStatus = string.Empty;
                 }
                 
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                rollbackError = $"Rollback failed: {ex.Message}";
+                rollbackError = Localizer["SafeOperationError"];
                 rollbackStatus = string.Empty;
             }
         }
@@ -2296,8 +2562,8 @@
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error loading subaccounts");
-                subAccountUpdateError = $"Error loading subaccounts: {ex.Message}";
+                _logger.LogError("Error loading subaccounts. ExceptionType={ExceptionType}", ex.GetType().Name);
+                subAccountUpdateError = Localizer["SafeOperationError"];
             }
         }
 
@@ -2392,9 +2658,9 @@
             }
             catch (Exception ex)
             {
-                subAccountUpdateError = $"Error updating subaccount: {ex.Message}";
+                subAccountUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "Sub-fund update failed", subAccountUpdateError);
-                _logger.LogError(ex, "Error updating subaccount {SubAccountId}", selectedSubAccount?.Id);
+                _logger.LogError("Error updating subaccount. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
         }
 
@@ -2433,9 +2699,9 @@
             }
             catch (Exception ex)
             {
-                subAccountUpdateError = $"Error deleting subaccount: {ex.Message}";
+                subAccountUpdateError = Localizer["SafeOperationError"];
                 NotifyMutation(NotificationSeverity.Error, "Sub-fund deletion failed", subAccountUpdateError);
-                _logger.LogError(ex, "Error deleting subaccount {SubAccountId}", selectedSubAccount?.Id);
+                _logger.LogError("Error deleting subaccount. ExceptionType={ExceptionType}", ex.GetType().Name);
             }
         }
     }

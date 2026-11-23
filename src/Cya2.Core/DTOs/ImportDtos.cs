@@ -42,6 +42,10 @@ public sealed class DonationImportRowDto
     public string? PhoneMobile { get => IsAnonymous ? null : _phoneMobile; set => _phoneMobile = value; }
     public string? GiftImportId { get => _giftImportId; init => _giftImportId = value; }
     public string? ResolvedDonorName { get; set; }
+    public string? ConstituentId { get; init; }
+    public string? SoftCreditRecipientId { get; init; }
+    public bool IsThirdPartySoftCredit { get; init; }
+    public bool IsSoftCredit { get; init; }
     public string? DonorIdentityKey { get; set; }
     public string? DonorResolutionSource { get; set; }
     public int DonorResolutionVersion { get; set; }

@@ -39,7 +39,8 @@ public sealed class ImportUploadValidator
     public async Task<byte[]> ReadAndValidateAsync(
         Stream file,
         string fileName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<byte[]>? validateWorkbook = null)
     {
         ArgumentNullException.ThrowIfNull(file);
 
@@ -77,9 +78,14 @@ public sealed class ImportUploadValidator
                 throw new ImportUploadValidationException("The uploaded file is not a valid Excel workbook.");
 
             var data = boundedStream.ToArray();
-            if (!HasZipSignature(data) || !HasExcelPackageEntries(data) || !CanOpenWorkbook(data))
+            if (!HasZipSignature(data) || !HasExcelPackageEntries(data))
                 throw new ImportUploadValidationException("The uploaded file is not a valid Excel workbook.");
 
+            cancellationToken.ThrowIfCancellationRequested();
+            if (validateWorkbook is not null)
+                validateWorkbook(data);
+            else if (!CanOpenWorkbook(data))
+                throw new ImportUploadValidationException("The uploaded file is not a valid Excel workbook.");
             return data;
         }
         finally

@@ -8,6 +8,8 @@
 -- Target: MySQL 8.0+ (the application uses utf8mb4_0900_ai_ci explicitly).
 -- Run this script after selecting the target database. Do not add credentials
 -- or CREATE USER statements to this file.
+-- During pre-production development, this is the sole schema definition.
+-- Do not create incremental migration scripts or schema history records.
 
 SET NAMES utf8mb4;
 
@@ -15,17 +17,20 @@ CREATE TABLE IF NOT EXISTS Accounts
 (
 	AccountId INT NOT NULL AUTO_INCREMENT,
 	Fund VARCHAR(255) NOT NULL,
+	AccountKind VARCHAR(32) NOT NULL DEFAULT 'Primary',
+	InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	DisplayName VARCHAR(255) NULL,
 	AccountingClass VARCHAR(255) NULL,
-	AccountNumber VARCHAR(255) NOT NULL,
+	AccountNumber VARCHAR(255) NULL,
 	CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	Overhead DECIMAL(10,2) NOT NULL DEFAULT 0.00,
 	SoftCredit VARCHAR(255) NOT NULL DEFAULT '',
 	BalanceAdjustment DECIMAL(18,2) NOT NULL DEFAULT 0.00,
-	OtherFunds BOOLEAN NOT NULL DEFAULT FALSE,
 	PRIMARY KEY (AccountId),
 	UNIQUE KEY uq_accounts_fund (Fund),
 	UNIQUE KEY uq_accounts_account_number (AccountNumber),
-	UNIQUE KEY uq_accounts_accounting_class (AccountingClass)
+	UNIQUE KEY uq_accounts_accounting_class (AccountingClass),
+	UNIQUE KEY uq_accounts_intern_source (InternSourceId)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_0900_ai_ci;
@@ -52,7 +57,7 @@ CREATE TABLE IF NOT EXISTS SubAccounts
 CREATE TABLE IF NOT EXISTS Users
 (
 	Id INT NOT NULL AUTO_INCREMENT,
-	GoogleId VARCHAR(255) NOT NULL,
+	GoogleId VARCHAR(255) NULL,
 	Email VARCHAR(320) NOT NULL,
 	Name VARCHAR(255) NOT NULL,
 	Language VARCHAR(16) NOT NULL DEFAULT 'en',
@@ -94,16 +99,16 @@ CREATE TABLE IF NOT EXISTS AccountsUsers
 CREATE TABLE IF NOT EXISTS Donors
 (
 	Id BIGINT NOT NULL AUTO_INCREMENT,
-	Fund VARCHAR(255) NOT NULL,
+	ConstituentId VARCHAR(255) COLLATE utf8mb4_bin NULL,
 	DisplayName VARCHAR(255) NOT NULL,
-	IdentityKey VARCHAR(512) NOT NULL,
+	IdentityKey VARCHAR(512) COLLATE utf8mb4_bin NOT NULL,
 	ResolutionSource VARCHAR(32) NOT NULL,
 	ResolutionVersion INT NOT NULL,
 	DateCreated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	DateModified DATETIME NULL,
 	PRIMARY KEY (Id),
-	UNIQUE KEY uq_donors_fund_identity (Fund, IdentityKey),
-	KEY ix_donors_fund (Fund),
+	UNIQUE KEY uq_donors_identity (IdentityKey),
+	UNIQUE KEY uq_donors_constituent (ConstituentId),
 	KEY ix_donors_display_name (DisplayName)
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
@@ -136,12 +141,17 @@ CREATE TABLE IF NOT EXISTS DonationData
 	DonorId BIGINT NOT NULL,
 	Date DATETIME NOT NULL,
 	GiftImportId VARCHAR(255) NULL,
+	ConstituentId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	SoftCreditRecipientId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	IsSoftCredit BOOLEAN NOT NULL DEFAULT FALSE,
 	AccountName VARCHAR(255) NOT NULL,
 	PaymentMethod VARCHAR(255) NOT NULL,
 	GiftType VARCHAR(255) NOT NULL,
 	Amount DECIMAL(18,2) NOT NULL,
 	Fund VARCHAR(255) NOT NULL,
 	InternName VARCHAR(255) NULL,
+	InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	SourceEvidenceJson JSON NULL,
 	PrimaryAddressee VARCHAR(255) NULL,
 	SoftCreditName VARCHAR(255) NULL,
 	IsAnonymous BOOLEAN NOT NULL DEFAULT FALSE,
@@ -189,12 +199,17 @@ CREATE TABLE IF NOT EXISTS DonationDataBackup
 	DonorId BIGINT NOT NULL,
 	Date DATETIME NOT NULL,
 	GiftImportId VARCHAR(255) NULL,
+	ConstituentId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	SoftCreditRecipientId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	IsSoftCredit BOOLEAN NOT NULL DEFAULT FALSE,
 	AccountName VARCHAR(255) NOT NULL,
 	PaymentMethod VARCHAR(255) NOT NULL,
 	GiftType VARCHAR(255) NOT NULL,
 	Amount DECIMAL(18,2) NOT NULL,
 	Fund VARCHAR(255) NOT NULL,
 	InternName VARCHAR(255) NULL,
+	InternSourceId VARCHAR(255) COLLATE utf8mb4_bin NULL,
+	SourceEvidenceJson JSON NULL,
 	PrimaryAddressee VARCHAR(255) NULL,
 	SoftCreditName VARCHAR(255) NULL,
 	IsAnonymous BOOLEAN NOT NULL DEFAULT FALSE,
@@ -215,7 +230,7 @@ CREATE TABLE IF NOT EXISTS DonorsBackup
 (
 	BackupId CHAR(36) NOT NULL,
 	Id BIGINT NOT NULL,
-	Fund VARCHAR(255) NOT NULL,
+	ConstituentId VARCHAR(255) COLLATE utf8mb4_bin NULL,
 	DisplayName VARCHAR(255) NOT NULL,
 	IdentityKey VARCHAR(512) NOT NULL,
 	ResolutionSource VARCHAR(32) NOT NULL,
@@ -250,7 +265,8 @@ CREATE TABLE IF NOT EXISTS DonorContactsBackup
 CREATE TABLE IF NOT EXISTS DonationBackupSnapshots
 (
 	BackupId CHAR(36) NOT NULL PRIMARY KEY,
-	BackupAt DATETIME NOT NULL,
+	-- Microsecond precision preserves ordering of rapid import snapshots.
+	BackupAt DATETIME(6) NOT NULL,
 	SourceRangeStart DATETIME NOT NULL,
 	RecordCount INT NOT NULL DEFAULT 0,
 	Pinned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -287,7 +303,7 @@ CREATE TABLE IF NOT EXISTS AccountingDataBackup
 CREATE TABLE IF NOT EXISTS AccountingBackupSnapshots
 (
 	BackupId CHAR(36) NOT NULL PRIMARY KEY,
-	BackupAt DATETIME NOT NULL,
+	BackupAt DATETIME(6) NOT NULL,
 	SourceRangeStart DATETIME NOT NULL,
 	RecordCount INT NOT NULL DEFAULT 0,
 	Pinned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -296,3 +312,55 @@ CREATE TABLE IF NOT EXISTS AccountingBackupSnapshots
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_0900_ai_ci;
+
+-- Restricted audit stream: internal numeric actor IDs and non-sensitive metadata only.
+CREATE TABLE IF NOT EXISTS AuditEvents
+(
+	Id BIGINT NOT NULL AUTO_INCREMENT,
+	ActorUserId INT NULL,
+	TargetUserId INT NULL,
+	OperationId CHAR(32) NOT NULL,
+	HostInstanceId CHAR(32) NOT NULL,
+	EventType VARCHAR(64) NOT NULL,
+	Outcome VARCHAR(32) NOT NULL,
+	OccurredAtUtc DATETIME NOT NULL,
+	TraceId VARCHAR(64) NULL,
+	ItemCount INT NULL,
+	PRIMARY KEY (Id),
+	KEY ix_audit_events_occurred_at_utc (OccurredAtUtc),
+	KEY ix_audit_events_actor_occurred_at_utc (ActorUserId, OccurredAtUtc),
+	KEY ix_audit_events_target_occurred_at_utc (TargetUserId, OccurredAtUtc),
+	UNIQUE KEY uq_audit_events_operation_event_outcome (OperationId, EventType, Outcome)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci;
+
+-- Associations follow current configuration without rewriting monetary/source data.
+-- A designation configured for different accounts is deliberately unresolved.
+CREATE OR REPLACE SQL SECURITY INVOKER VIEW NormalDonationAccountMappings AS
+SELECT candidates.Fund, MIN(candidates.AccountId) AS AccountId,
+	   CASE WHEN MAX(candidates.IsPrimary) = 1 THEN 'Primary'
+			WHEN MAX(candidates.IsMerged) = 1 THEN 'Merged' ELSE 'Separate' END AS AllocationKind
+FROM (
+	SELECT Fund, AccountId, 1 AS IsPrimary, 0 AS IsMerged
+	FROM Accounts WHERE AccountKind <> 'Intern'
+	UNION ALL
+	SELECT sub.SubFund, sub.AccountId, 0, CASE WHEN sub.Kind = 'Merged' THEN 1 ELSE 0 END
+	FROM SubAccounts sub JOIN Accounts account ON account.AccountId = sub.AccountId
+	WHERE account.AccountKind <> 'Intern' AND sub.Kind IN ('Merged', 'Separate')
+) candidates
+GROUP BY candidates.Fund
+HAVING COUNT(DISTINCT candidates.AccountId) = 1;
+
+-- Nonblank intern source IDs never fall back to normal fund association.
+CREATE OR REPLACE SQL SECURITY INVOKER VIEW DonationAccountAssociations AS
+SELECT donation.Id AS DonationId, mapping.AccountId, mapping.AllocationKind
+FROM DonationData donation
+JOIN NormalDonationAccountMappings mapping ON mapping.Fund = donation.Fund
+WHERE donation.InternSourceId IS NULL OR donation.InternSourceId = ''
+UNION ALL
+SELECT donation.Id, account.AccountId, 'Intern'
+FROM DonationData donation
+JOIN Accounts account ON account.AccountKind = 'Intern'
+	AND CAST(account.InternSourceId AS BINARY) = CAST(donation.InternSourceId AS BINARY)
+WHERE donation.InternSourceId IS NOT NULL AND donation.InternSourceId <> '';

@@ -1,14 +1,36 @@
 @inject DialogService DialogService
 @inject IStringLocalizer<Resource> Localizer
+@inject ILogger<UploadConfirmationDialog> Logger
 
+@if (_preparing)
+{
+    <div role="status" aria-live="polite" aria-busy="true">
+        <RadzenStack Orientation="Orientation.Vertical" Gap="1rem">
+            <RadzenText>@Localizer["PreparingUploadPreview"]</RadzenText>
+            <RadzenProgressBar Value="100" ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+        </RadzenStack>
+    </div>
+}
+else if (_preparationError is not null)
+{
+    <RadzenStack Orientation="Orientation.Vertical" Gap="1rem">
+        <div role="alert">@_preparationError</div>
+        <RadzenButton Text="@Localizer["Cancel"]" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(false))" />
+    </RadzenStack>
+}
+else if (_confirmed)
+{
+    <UploadProgressDialog ProgressId="@ProgressId" SubmitImport="@SubmitImport" />
+}
+else
+{
+    var preview = _preparedPreview ?? Preview;
 <RadzenCard Class="upload-confirm-dialog-card" Style="padding: 1rem; width:100%; max-width:100%; box-sizing:border-box;">
     <RadzenStack Orientation="Orientation.Vertical" Gap="1rem">
-        <RadzenText TextStyle="TextStyle.H6">@Localizer["ConfirmFileUpload"]</RadzenText>
-
         <RadzenStack Orientation="Orientation.Vertical" Gap="0.5rem" Style="background-color:#f8f9fa; padding:0.75rem; border-radius:4px;">
-            <div><b>@Localizer["FileName"]:</b> @Preview?.FileName</div>
-            <div><b>@Localizer["Size"]:</b> @(Preview == null ? "" : FormatSize(Preview.FileSizeBytes))</div>
-            @if (Preview != null && !IsLikelyExcelFile(Preview))
+            <div><b>@Localizer["FileName"]:</b> @preview?.FileName</div>
+            <div><b>@Localizer["Size"]:</b> @(preview == null ? "" : FormatSize(preview.FileSizeBytes))</div>
+            @if (preview != null && !IsLikelyExcelFile(preview))
             {
                 <div style="color:#910813; font-weight:600;">
                     @Localizer["UploadInvalidExcelFormatMessage"]
@@ -20,15 +42,33 @@
             @Localizer["ConfirmFileUploadMessage"]
         </RadzenText>
 
+        @if (preview?.MinimumDonationDate is { } boundary)
+        {
+            <div>
+                <div><b>@Localizer["FirstDonation"]</b> @boundary.ToString("MMMM d, yyyy", CultureInfo.CurrentCulture)</div>
+                <div><b>@Localizer["NumberOfRows"]</b> @(preview.SourceRowCount ?? 0)</div>
+                <div><b>@Localizer["NumberOfDuplicateRowsRemoved"]</b> @preview.DuplicateRowsMerged</div>
+                <div><b>@Localizer["TotalNumberOfDonations"]</b> @(preview.CanonicalDonationCount ?? 0)</div>
+            </div>
+            @if (preview.RequiresOldDateAcknowledgment)
+            {
+                <label>
+                    <input type="checkbox" @bind="_oldDateAcknowledged" />
+                    @Localizer["DonationOldDateConsent"]
+                </label>
+            }
+        }
+
         <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.75rem" Class="upload-confirm-actions">
             <RadzenButton Text="@Localizer["Cancel"]" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(false))" />
             <RadzenButton Text="@Localizer["Confirm"]"
                           ButtonStyle="ButtonStyle.Primary"
-                          Click="@(() => DialogService.Close(true))"
-                          Disabled="@(Preview == null || !IsLikelyExcelFile(Preview))" />
+                          Click="@ConfirmUpload"
+                          Disabled="@(preview == null || !IsLikelyExcelFile(preview) || (preview.RequiresOldDateAcknowledgment && !_oldDateAcknowledged))" />
         </RadzenStack>
     </RadzenStack>
 </RadzenCard>
+}
 
 <style>
     .upload-confirm-dialog-card {
@@ -52,6 +92,45 @@
 
 @code {
     [Parameter] public Cya2.Application.Interfaces.FilePreviewResult? Preview { get; set; }
+    [Parameter] public Func<Task<Cya2.Application.Interfaces.FilePreviewResult>>? PreparePreview { get; set; }
+    [Parameter] public string ProgressId { get; set; } = string.Empty;
+    [Parameter] public Func<Task>? SubmitImport { get; set; }
+    private Cya2.Application.Interfaces.FilePreviewResult? _preparedPreview;
+    private string? _preparationError;
+    private bool _preparing;
+    private bool _oldDateAcknowledged;
+    private bool _confirmed;
+
+    protected override void OnInitialized()
+    {
+        _preparing = PreparePreview is not null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || PreparePreview is null) return;
+
+        try
+        {
+            _preparedPreview = await PreparePreview();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError("Upload preview preparation failed. ExceptionType={ExceptionType}", exception.GetType().Name);
+            _preparationError = cya2.Services.AdminNotificationPolicy.UploadErrorDetail(exception, Localizer);
+        }
+        finally
+        {
+            _preparing = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ConfirmUpload()
+    {
+        if (SubmitImport is null) DialogService.Close(true);
+        else _confirmed = true;
+    }
 
     private static string FormatSize(long bytes)
     {

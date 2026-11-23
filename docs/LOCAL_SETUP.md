@@ -1,5 +1,7 @@
 # CYA2 Local Setup (Draft)
 
+Current production findings and acceptance work are tracked in [Production review](PRODUCTION_REVIEW.md). This guide documents procedures, not proof that a deployment has passed them.
+
 For a fresh production installation on Azure App Service and Azure Database for MySQL, use [Azure production setup](AZURE_SETUP.md). This document focuses on local development and testing.
 
 > **Status: Draft**
@@ -51,6 +53,16 @@ CREATE DATABASE cya2_test
 
 Use a different database name if `cya2_test` already exists. Do not use an existing database that contains application tables or real data.
 
+Verify the database-level defaults before initializing:
+
+```sql
+SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME
+FROM information_schema.SCHEMATA
+WHERE SCHEMA_NAME = 'cya2_test';
+```
+
+Expect `utf8mb4` and `utf8mb4_0900_ai_ci`. A database created by a hosting provider may instead inherit a different default, even when its application tables use `utf8mb4`. Import staging relies on the database default and can fail with MySQL error 1253 if it is incompatible. For diagnosis and controlled correction of an existing database, see [Azure setup](AZURE_SETUP.md#4-create-the-fresh-database-and-initialize-the-schema); changing the database default does not convert existing tables or data.
+
 For this local test setup, the same local MySQL account can initialize the schema and run the application. A production deployment must use separate restricted runtime and schema setup accounts.
 
 ### 4. Initialize the schema from PowerShell
@@ -70,10 +82,10 @@ $env:CYA2_SCHEMA_CONNECTION_STRING = "Server=localhost;Port=3306;Database=cya2_t
 Run the database migrator:
 
 ```powershell
-dotnet run --project tools/Cya2.DatabaseMigrator -- --connection-string "$env:CYA2_SCHEMA_CONNECTION_STRING" --initialize
+dotnet run --project tools/Cya2.DatabaseMigrator -- --initialize
 ```
 
-The migrator runs `database/schema/001_InitialSchema.sql`, records the baseline, and applies later scripts from `database/migrations`. The application does not create or alter persistent tables.
+The initializer reads `CYA2_SCHEMA_CONNECTION_STRING` and applies `database/schema/001_InitialSchema.sql` to an empty database. It records no migration history and does not apply incremental migrations during pre-production. The application does not create or alter persistent tables.
 
 Refresh `cya2_test` in Workbench after the command succeeds. Tables such as `Users`, `Accounts`, `DonationData`, and `AccountingData` should appear.
 
@@ -214,25 +226,18 @@ database/schema/001_InitialSchema.sql
 
 This script creates the clean application schema, including the operational tables and rollback tables. It does not load donor data, accounting data, fake data, users, or secrets.
 
-Create an empty local database first. Then initialize it with the standalone runner using the setup account:
+Create an empty local database first with database defaults `utf8mb4` / `utf8mb4_0900_ai_ci`; verify them using the query in the walkthrough above. Then initialize it with the standalone runner using the setup account:
 
 ```powershell
 $env:CYA2_SCHEMA_CONNECTION_STRING = "Server=<local-host>;Port=<port>;Database=<database-name>;User ID=<setup-user>;Password=<setup-password>;SslMode=<local-development-mode>;"
-dotnet run --project tools/Cya2.DatabaseMigrator -- --connection-string "$env:CYA2_SCHEMA_CONNECTION_STRING" --initialize
+dotnet run --project tools/Cya2.DatabaseMigrator -- --initialize
 ```
 
 The command above is an example only. Do not replace the placeholders with real credentials in this document.
 
-The `--initialize` option applies `database/schema/001_InitialSchema.sql`, records the baseline, and then applies any pending scripts in `database/migrations`. It is safe only for an empty application database; the runner refuses initialization when application tables already exist. The application does not create, alter, or drop persistent tables during normal operation. Donation imports create session-scoped temporary staging tables; the runtime account therefore needs the separate MySQL `CREATE TEMPORARY TABLES` permission for that workflow.
+The `--initialize` option applies `database/schema/001_InitialSchema.sql` only to an empty database; it creates no migration history and does not support incremental migrations during pre-production. MySQL DDL may leave a partially initialized database if setup fails. Investigate before retrying and never recreate a populated database without an approved preservation plan. The application does not create, alter, or drop persistent tables during normal operation. Donation imports create session-scoped temporary staging tables; the runtime account therefore needs the separate MySQL `CREATE TEMPORARY TABLES` permission for that workflow.
 
-For later schema changes, use the standalone migration runner with the setup account rather than the web application:
-
-```powershell
-$env:CYA2_SCHEMA_CONNECTION_STRING = "Server=<local-host>;Port=<port>;Database=<database-name>;User ID=<setup-user>;Password=<setup-password>;SslMode=<local-development-mode>;"
-dotnet run --project tools/Cya2.DatabaseMigrator -- --connection-string "$env:CYA2_SCHEMA_CONNECTION_STRING"
-```
-
-The runner applies numbered scripts from `database/migrations` in order and records successful applications in `Cya2SchemaMigrations`. It is not invoked by Blazor startup. Existing databases created from `database/schema/001_InitialSchema.sql` require explicit schema verification before the deployment process adopts that baseline; do not insert a baseline history row without that verification.
+Pre-production schema changes belong in the initial schema. Existing databases require a separately reviewed, non-destructive reconciliation plan; running the initializer again or without `--initialize` is not a migration strategy.
 
 The setup account and restricted application account are MySQL database-infrastructure users. Create them with the DBA, hosting provider, or a protected provisioning process. The Blazor application and migration runner consume their connection strings but do not create database users or manage their passwords.
 
@@ -278,16 +283,13 @@ The code recognizes the following optional settings:
 
 ```json
 {
-  "Import": {
-	"BatchSize": 1000,
-	"UseLocalInfile": false,
-	"MaxAttempts": 3,
+	  "Import": {
 	"MaximumUploadBytes": 5120000
   }
 }
 ```
 
-The values shown are the current code defaults or safe local-development values. `UseLocalInfile` also depends on the MySQL connection configuration allowing local infile operations. Enable it only after the security implications and server settings have been confirmed.
+Financial replacements now use validated temporary staging and one atomic publication transaction. Legacy `BatchSize`, `UseLocalInfile` and `MaxAttempts` settings do not control these imports; local-infile loading and live-write retry/fallback have been removed. Ensure the initial schema is compatible with the application version; existing databases require a reviewed reconciliation plan. See [import safety](IMPORT_SAFETY.md).
 
 Uploaded donation and accounting workbooks must use the `.xlsx` extension and are limited to 5,000 KB (5,120,000 bytes). The application validates the OOXML package signature before retaining a preview. This limit was selected because current workbooks are below 3,000 KB while allowing room for growth.
 
@@ -367,7 +369,7 @@ The deployment requires the Azure OIDC secrets configured in GitHub Actions: `AZ
 
 ## 8. Load development data
 
-The current repository does not yet contain approved fake donor data, fake accounting data, or fake Excel import fixtures.
+Opt-in synthetic donor and accounting **SQL** fixtures are available in [database/fixtures](../database/fixtures/SYNTHETIC_DATA_README.md). Load them only into an isolated development/test database after schema initialization. They are not Excel import workbooks and do not prove the upload/parsing pipeline. Approved donor/QuickBooks workbook fixtures and end-to-end coverage remain A13/B07 in the production review.
 
 For local testing, use only:
 
@@ -398,21 +400,14 @@ The following values must be supplied locally and must not be committed:
 
 Recommended local storage options are .NET user secrets, environment variables, or a local secret manager. Do not put these values in `appsettings.json`, `appsettings.Development.json`, documentation, SQL scripts, or test fixtures.
 
-## 10. Information still needed to finalize this guide
+## 10. Remaining owner and environment decisions
 
-The following information is not available or not confirmed in the repository:
+The guide above already documents MySQL 8.0+, database creation, setup/runtime account responsibilities, temporary-table grants, example TLS/connection settings, tooling, and disabled-by-default local infile. These procedures still need environment verification; they are not missing instructions.
 
-1. Supported and tested MySQL version.
-2. Local database creation procedure and database name convention.
-3. Local schema setup account and restricted runtime account responsibilities.
-4. Required MySQL grants, including the temporary-table grant.
-5. Standard local connection-string format and TLS requirements.
-6. Google Cloud project, OAuth client, authorized redirect URIs, and local sign-in users.
-7. Approved local test Google account and OAuth client values.
-8. Complete list of required environment settings for the chosen hosting and development environments.
-9. Whether `Import:UseLocalInfile` should remain disabled or be enabled in approved environments.
-10. Supported operating systems and required local tooling.
-11. Approved synthetic data and Excel fixtures.
-12. Final Azure Web App settings, production connection string, Google OAuth redirect URI, and database hosting details.
+- Supply approved Google project/client/test-user secrets outside source control and verify exact redirects.
+- Execute the Docker tests against the selected MySQL version and prove restricted-user staging/rollback behavior.
+- Approve synthetic Excel fixtures; existing SQL fixtures are distinct from workbook tests.
+- Confirm actual Azure resource names, private network, runtime/TLS settings and production configuration through the private pre-live deployment checklist (review stage B).
+- Approve operational retention, access, recovery and release policies with the organization.
 
 EPPlus licensing decision: Servant Partners is a legal US nonprofit using CYA2 only for internal operations. The application is not sold, licensed, or provided to other organizations. Retain the existing Polyform Noncommercial notices and review licensing before any change to this use.

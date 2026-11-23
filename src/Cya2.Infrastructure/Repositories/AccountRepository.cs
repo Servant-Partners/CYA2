@@ -22,7 +22,7 @@ public sealed class AccountRepository : IAccountRepository
     public async Task<Account?> GetByIdAsync(int id)
     {
         _dbGuard.ThrowIfUnavailable();
-        const string sql = "SELECT AccountId, Fund, AccountingClass, AccountNumber, CreatedAt, Overhead, SoftCredit, BalanceAdjustment FROM Accounts WHERE AccountId = @Id LIMIT 1";
+        const string sql = "SELECT * FROM Accounts WHERE AccountId = @Id LIMIT 1";
         await using var conn = new MySqlConnection(ConnStr);
         return await conn.QueryFirstOrDefaultAsync<Account>(sql, new { Id = id });
     }
@@ -30,7 +30,7 @@ public sealed class AccountRepository : IAccountRepository
     public async Task<List<Account>> GetAllAsync()
     {
         _dbGuard.ThrowIfUnavailable();
-        const string sql = "SELECT AccountId, Fund, AccountingClass, AccountNumber, CreatedAt, Overhead, SoftCredit, BalanceAdjustment FROM Accounts ORDER BY Fund";
+        const string sql = "SELECT * FROM Accounts ORDER BY Fund";
         await using var conn = new MySqlConnection(ConnStr);
         var rows = await conn.QueryAsync<Account>(sql);
         return rows.ToList();
@@ -88,7 +88,7 @@ WHERE AccountId = @AccountId";
     public async Task<Account?> GetByFundAsync(string fund)
     {
         _dbGuard.ThrowIfUnavailable();
-        const string sql = "SELECT AccountId, Fund, AccountingClass, AccountNumber, CreatedAt, Overhead, SoftCredit, BalanceAdjustment FROM Accounts WHERE Fund = @Fund LIMIT 1";
+        const string sql = "SELECT * FROM Accounts WHERE Fund = @Fund LIMIT 1";
         await using var conn = new MySqlConnection(ConnStr);
         return await conn.QueryFirstOrDefaultAsync<Account>(sql, new { Fund = fund });
     }
@@ -96,7 +96,7 @@ WHERE AccountId = @AccountId";
     public async Task<Account?> GetByAccountNumberAsync(string accountNumber)
     {
         _dbGuard.ThrowIfUnavailable();
-        const string sql = "SELECT AccountId, Fund, AccountingClass, AccountNumber, CreatedAt, Overhead, SoftCredit, BalanceAdjustment FROM Accounts WHERE AccountNumber = @AccountNumber LIMIT 1";
+        const string sql = "SELECT * FROM Accounts WHERE AccountNumber = @AccountNumber LIMIT 1";
         await using var conn = new MySqlConnection(ConnStr);
         return await conn.QueryFirstOrDefaultAsync<Account>(sql, new { AccountNumber = accountNumber });
     }
@@ -105,7 +105,7 @@ WHERE AccountId = @AccountId";
     {
         _dbGuard.ThrowIfUnavailable();
         const string sql = @"
-SELECT a.AccountId, a.Fund, a.AccountingClass, a.AccountNumber, a.CreatedAt, a.Overhead, a.SoftCredit, a.BalanceAdjustment
+SELECT a.*
 FROM Accounts a
 INNER JOIN AccountsUsers au ON a.AccountId = au.AccountId
 WHERE au.UserId = @UserId

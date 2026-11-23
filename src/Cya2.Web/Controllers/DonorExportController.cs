@@ -10,6 +10,7 @@ using OfficeOpenXml;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Antiforgery;
+using Cya2.Core.Entities;
 
 namespace cya2.Controllers
 {
@@ -41,6 +42,8 @@ namespace cya2.Controllers
         public class ExportRequest
         {
             public List<string> Funds { get; set; } = new List<string>();
+            public int? AccountId { get; set; }
+            public string SelectedSubAccount { get; set; } = "All";
             public DateTime? StartDate { get; set; }
             public DateTime? EndDate { get; set; }
             public bool AllDates { get; set; }
@@ -55,28 +58,23 @@ namespace cya2.Controllers
         [HttpPost("export-data")]
         public async Task<IActionResult> ExportData()
         {
+            using var operation = AuditOperationScope.Begin(null);
+            int? auditActorId = null;
             try
             {
                 try
                 {
                     await _antiforgery.ValidateRequestAsync(HttpContext);
                 }
-                catch (AntiforgeryValidationException ex)
+                catch (AntiforgeryValidationException)
                 {
                     var hasHeaderToken = Request.Headers.ContainsKey("RequestVerificationToken");
                     var hasFormToken = Request.HasFormContentType && Request.Form.ContainsKey("__RequestVerificationToken");
-                    var antiforgeryCookies = Request.Cookies.Keys
-                        .Where(k => k.Contains("Antiforgery", StringComparison.OrdinalIgnoreCase))
-                        .ToArray();
-
-                    _logger.LogWarning(ex,
-                        "Antiforgery validation failed for {Path}. HasHeaderToken={HasHeaderToken}, HasFormToken={HasFormToken}, HeaderNames={HeaderNames}, AntiforgeryCookies={AntiforgeryCookies}, ContentType={ContentType}",
-                        Request.Path,
+                    _logger.LogWarning(
+                        "Antiforgery validation failed. TraceId={TraceId}, HasHeaderToken={HasHeaderToken}, HasFormToken={HasFormToken}",
+                        HttpContext.TraceIdentifier,
                         hasHeaderToken,
-                        hasFormToken,
-                        string.Join(",", Request.Headers.Keys),
-                        string.Join(",", antiforgeryCookies),
-                        Request.ContentType ?? string.Empty);
+                        hasFormToken);
 
                     return BadRequest("Antiforgery validation failed.");
                 }
@@ -116,7 +114,7 @@ namespace cya2.Controllers
                     return BadRequest("No export data provided.");
                 }
 
-                if (req.Funds == null || !req.Funds.Any(f => !string.IsNullOrWhiteSpace(f)))
+                if (!req.AccountId.HasValue && (req.Funds == null || !req.Funds.Any(f => !string.IsNullOrWhiteSpace(f))))
                 {
                     return BadRequest("At least one fund is required.");
                 }
@@ -124,23 +122,24 @@ namespace cya2.Controllers
                 var userId = _userIdResolver.ResolveUserId(User);
                 if (string.IsNullOrWhiteSpace(userId))
                 {
+                    await _auditEvents.RecordAsync(null, AuditEventTypes.DonorExportDenied, AuditOutcomes.Denied, HttpContext.TraceIdentifier);
                     return Unauthorized();
                 }
+                auditActorId = int.TryParse(userId, out var numericActorId) ? numericActorId : null;
 
                 var authLevel = User.FindFirst("AuthLevel")?.Value ?? string.Empty;
                 var isAdminOrViewerHint = User.IsInRole("Admin")
                     || string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
 
-                var exportData = await _donorExportService.GetExportDataAsync(
-                    userId,
-                    isAdminOrViewerHint,
-                    req.Funds,
-                    req.AllDates,
-                    req.StartDate,
-                    req.EndDate);
+                var exportData = req.AccountId.HasValue
+                    ? await _donorExportService.GetSelectionExportDataAsync(userId, isAdminOrViewerHint,
+                        req.AccountId.Value, req.SelectedSubAccount, req.AllDates, req.StartDate, req.EndDate)
+                    : await _donorExportService.GetExportDataAsync(userId, isAdminOrViewerHint,
+                        req.Funds, req.AllDates, req.StartDate, req.EndDate);
                 if (!exportData.UserContextFound)
                 {
+                    await _auditEvents.RecordAsync(auditActorId, AuditEventTypes.DonorExportDenied, AuditOutcomes.Denied, HttpContext.TraceIdentifier);
                     return Forbid();
                 }
                 if (!exportData.FundsAuthorized)
@@ -164,15 +163,6 @@ namespace cya2.Controllers
                 {
                     return BadRequest("No export data provided.");
                 }
-
-                _logger.LogInformation("Donor export generated: requestedFundCount={RequestedFundCount}; generatedRows={Count}",
-                    requestedFunds.Count, donorRows.Count);
-                await _auditEvents.RecordAsync(
-                    int.TryParse(userId, out var actorId) ? actorId : null,
-                    AuditEventTypes.DonorExportCompleted,
-                    AuditOutcomes.Succeeded,
-                    HttpContext.TraceIdentifier,
-                    donorRows.Count);
 
                 // Use EPPlus license API for non-commercial organization
                 ExcelPackage.License.SetNonCommercialOrganization("Servant Partners");
@@ -211,13 +201,18 @@ namespace cya2.Controllers
                 ws.Cells[ws.Dimension.Address].AutoFitColumns();
                 var bytes = package.GetAsByteArray();
                 var fileName = BuildExportFileName(requestedFunds, req.AllDates, req.StartDate, req.EndDate);
+                await _auditEvents.RecordRequiredAsync(auditActorId, AuditEventTypes.DonorExportCompleted, AuditOutcomes.Succeeded,
+                    HttpContext.TraceIdentifier, donorRows.Count, CancellationToken.None);
+                _logger.LogInformation("Donor export workbook generated. GeneratedRows={Count}", donorRows.Count);
                 // Return the file as a FileContentResult
                 var result = File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
                 return result;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Donor export failed. TraceId={TraceId}", HttpContext.TraceIdentifier);
+                _logger.LogError("Donor export failed. TraceId={TraceId}, ExceptionType={ExceptionType}", HttpContext.TraceIdentifier, ex.GetType().Name);
+                await _auditEvents.RecordAsync(auditActorId, AuditEventTypes.DonorExportFailed,
+                    ex is OperationCanceledException ? AuditOutcomes.Cancelled : AuditOutcomes.Failed, HttpContext.TraceIdentifier, cancellationToken: CancellationToken.None);
                 return Problem(
                     detail: $"An unexpected error occurred while generating the export. TraceId={HttpContext.TraceIdentifier}",
                     statusCode: StatusCodes.Status500InternalServerError);
@@ -226,9 +221,12 @@ namespace cya2.Controllers
 
         private static string BuildExportFileName(List<string> requestedFunds, bool allDates, DateTime? startDate, DateTime? endDate)
         {
-            var fundPart = requestedFunds.Count == 1
-                ? SanitizeFilePart(requestedFunds[0])
-                : $"multi_{requestedFunds.Count}_funds";
+            var fundPart = requestedFunds.Count switch
+            {
+                0 => "account",
+                1 => SanitizeFilePart(requestedFunds[0]),
+                _ => $"multi_{requestedFunds.Count}_funds"
+            };
 
             var rangePart = allDates
                 ? "all-dates"
@@ -257,6 +255,7 @@ namespace cya2.Controllers
         Cya2.Core.Enums.DonorFrequency.Quarterly => "Quarterly",
             Cya2.Core.Enums.DonorFrequency.Yearly => "Yearly",
             Cya2.Core.Enums.DonorFrequency.Sporadic => "Sporadic",
+            Cya2.Core.Enums.DonorFrequency.Mixed => "Mixed",
             _ => string.Empty
         };
     }

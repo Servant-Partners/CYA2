@@ -4,6 +4,8 @@ using Dapper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MySql.Data.MySqlClient;
+using Cya2.Infrastructure.Services;
+using Cya2.Application.Interfaces;
 
 namespace Cya2.Infrastructure.Repositories;
 
@@ -36,18 +38,10 @@ public sealed class UserRepository : IUserRepository
     public async Task<List<User>> GetAllAsync()
     {
         _dbGuard.ThrowIfUnavailable();
-        try
-        {
-            const string sql = "SELECT Id, GoogleId, Email, Name, Language, AuthLevel, DefaultAccount FROM Users ORDER BY Name";
-            await using var conn = new MySqlConnection(ConnStr);
-            var rows = await conn.QueryAsync<User>(sql);
-            return rows.ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "UserRepository.GetAllAsync failed.");
-            return new List<User>();
-        }
+        const string sql = "SELECT Id, GoogleId, Email, Name, Language, AuthLevel, DefaultAccount FROM Users ORDER BY Name";
+        await using var conn = new MySqlConnection(ConnStr);
+        var rows = await conn.QueryAsync<User>(sql);
+        return rows.ToList();
     }
 
     public async Task<User> AddAsync(User entity)
@@ -79,6 +73,31 @@ WHERE Id = @Id";
             entity.Language, entity.AuthLevel, entity.DefaultAccount
         });
         return await GetByIdAsync(entity.Id) ?? entity;
+    }
+
+    public async Task<User?> TryBindGoogleIdAsync(int userId, string email, string googleId)
+    {
+        _dbGuard.ThrowIfUnavailable();
+        await using var conn = new MySqlConnection(ConnStr);
+        try
+        {
+            await conn.ExecuteAsync("UPDATE Users SET GoogleId=@googleId WHERE Id=@userId AND Email=@email AND (GoogleId IS NULL OR GoogleId='')", new { userId, email, googleId });
+        }
+        catch (MySqlException ex) when (ex.Number == 1062)
+        {
+            return null;
+        }
+
+        var user = await conn.QueryFirstOrDefaultAsync<User>("SELECT Id, GoogleId, Email, Name, Language, AuthLevel, DefaultAccount FROM Users WHERE Id=@userId", new { userId });
+        return user is not null && string.Equals(user.Email, email, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(user.GoogleId, googleId, StringComparison.Ordinal) ? user : null;
+    }
+
+    public async Task<bool> UpdateLanguageAsync(int userId, string language)
+    {
+        _dbGuard.ThrowIfUnavailable();
+        await using var conn = new MySqlConnection(ConnStr);
+        return await conn.ExecuteAsync("UPDATE Users SET Language=@language WHERE Id=@userId", new { userId, language }) > 0;
     }
 
     public async Task DeleteAsync(int id)
@@ -144,7 +163,8 @@ VALUES (@GoogleId, @Email, @Name, @Language, @AuthLevel, @DefaultAccount)";
 
         try
         {
-            var userCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM Users");
+            await using var transaction = await conn.BeginTransactionAsync();
+            var userCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM Users", transaction: transaction);
             if (userCount != 0)
             {
                 return null;
@@ -158,9 +178,13 @@ VALUES (@GoogleId, @Email, @Name, @Language, @AuthLevel, @DefaultAccount)";
                 user.Language,
                 user.AuthLevel,
                 user.DefaultAccount
-            });
+            }, transaction);
 
-            return await GetByEmailAsync(user.Email);
+            var created = await conn.QuerySingleAsync<User>("SELECT Id, GoogleId, Email, Name, Language, AuthLevel, DefaultAccount FROM Users WHERE Email=@Email", new { user.Email }, transaction);
+            using var audit = AuditOperationScope.Begin(created.Id);
+            await TransactionalAudit.RecordAsync(conn, transaction, AuditEventTypes.AdminUserCreated, _logger, targetUserId: created.Id);
+            await transaction.CommitAsync();
+            return created;
         }
         finally
         {

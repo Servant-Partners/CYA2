@@ -38,8 +38,17 @@ namespace Cya2.Infrastructure.Services
             _cacheInvalidator = cacheInvalidator;
         }
 
-        public Task<ImportResult> ProcessAsync(Stream file, string progressId, CancellationToken cancellationToken)
-            => ProcessAsync(file, cancellationToken, progressId);
+        public async Task<ImportResult> ProcessAsync(Stream file, string progressId, CancellationToken cancellationToken)
+        {
+            using var lease = await FinancialWriteCoordinator.EnterAsync(cancellationToken);
+            try { return await ProcessAsync(file, cancellationToken, progressId); }
+            catch (ImportOutcomeUnknownException)
+            {
+                try { _cacheInvalidator.Invalidate(CacheDataDomains.Accounting); }
+                catch { _logger.LogWarning("Uncertain accounting import cache refresh failed."); }
+                throw;
+            }
+        }
 
         private async Task<ImportResult> ProcessAsync(Stream file, CancellationToken ct, string progressId)
         {
@@ -91,42 +100,29 @@ namespace Cya2.Infrastructure.Services
                 return result;
             }
 
-            int totalDataRows = Math.Max(0, (ws.Dimension?.End.Row ?? 0) - firstDataRow + 1);
+            int lastRow = ws.Dimension?.End.Row ?? 0;
+            while (lastRow >= firstDataRow && IsBlankRow(ws, lastRow)) lastRow--;
+            if (lastRow >= firstDataRow + 2 && IsBlankRow(ws, lastRow - 1) && IsBlankRow(ws, lastRow - 2) && IsCashBasisFooter(ws, lastRow))
+            {
+                lastRow--;
+                while (lastRow >= firstDataRow && IsBlankRow(ws, lastRow)) lastRow--;
+            }
+
+            int totalDataRows = Math.Max(0, lastRow - firstDataRow + 1);
             _progressService.CompleteStep(progressId, "File Validation", "Completed", $"Found {totalDataRows:N0} rows to import");
 
-            // Step 2: Data Analysis — find earliest date
-            _progressService.AddStep(progressId, "Data Analysis", "Analyzing import data for date range...");
-            DateTime? earliest = null;
-            int lastRow = ws.Dimension?.End.Row ?? 0;
-            for (int r = firstDataRow; r <= lastRow; r++)
-            {
-                if (ExcelParsingHelpers.TryParseDateUS(ws.Cells[r, map["Date"]]?.Text?.Trim(), out var d))
-                    if (earliest == null || d < earliest.Value) earliest = d;
-            }
-
-            if (earliest.HasValue)
-            {
-                _progressService.CompleteStep(progressId, "Data Analysis", "Completed", $"Earliest date: {earliest.Value:yyyy-MM-dd}");
-                _progressService.AddStep(progressId, "Database Backup", "Backing up all existing records...");
-                await _repository.BackupAllAndDeleteFromDateAsync(earliest.Value, progressId, ct);
-                _progressService.CompleteStep(progressId, "Database Backup", "Completed", "All existing data backed up, range cleared");
-            }
-            else
-            {
-                _progressService.CompleteStep(progressId, "Data Analysis", "Completed", "No valid dates found in import file");
-            }
+            _progressService.AddStep(progressId, "Data Analysis", "Validating all accounting rows before publication...");
 
             // Step 3: Data Import
             _progressService.AddStep(progressId, "Data Import", "Importing accounting records...");
             _progressService.SetExpected(progressId, totalDataRows);
             _progressService.Report(progressId, 0, 0, 0, "Starting import...");
 
-            int batchSize = _config.GetValue<int>("Import:BatchSize", 1000);
-            var batch = new List<AccountingImportRowDto>(batchSize);
+            var batch = new List<AccountingImportRowDto>(totalDataRows);
 
             for (int r = firstDataRow; r <= lastRow; r++)
             {
-                if (ct.IsCancellationRequested) break;
+                ct.ThrowIfCancellationRequested();
 
                 var cls = ws.Cells[r, map["Class"]]?.Text?.Trim();
                 var dtTxt = ws.Cells[r, map["Date"]]?.Text?.Trim();
@@ -134,10 +130,16 @@ namespace Cya2.Infrastructure.Services
                 var amtTxt = ws.Cells[r, map["Amount"]]?.Text?.Trim();
                 var acct = ws.Cells[r, map["Account"]]?.Text?.Trim();
 
-                if (string.IsNullOrWhiteSpace(cls) && string.IsNullOrWhiteSpace(num) && string.IsNullOrWhiteSpace(acct)) continue;
+                if (IsBlankRow(ws, r)) continue;
 
                 if (!ExcelParsingHelpers.TryParseDateUS(dtTxt, out var date)) { result.FailedRows++; result.Errors.Add(ImportDiagnosticMessages.InvalidCell(r, "Date")); continue; }
                 if (!ExcelParsingHelpers.TryParseDoubleUS(amtTxt, out var amount)) { result.FailedRows++; result.Errors.Add(ImportDiagnosticMessages.InvalidCell(r, "Amount")); continue; }
+                if (!double.IsFinite(amount) || Math.Abs(amount) >= 10000000000000000d || string.IsNullOrWhiteSpace(cls) || string.IsNullOrWhiteSpace(acct))
+                {
+                    result.FailedRows++;
+                    result.Errors.Add(ImportDiagnosticMessages.InvalidCell(r, "Amount, Class or Account"));
+                    continue;
+                }
 
                 batch.Add(new AccountingImportRowDto
                 {
@@ -151,32 +153,39 @@ namespace Cya2.Infrastructure.Services
                 });
                 result.TotalRows++;
 
-                if (batch.Count >= batchSize)
-                {
-                    var batchResult = await _repository.BulkInsertAsync(batch, ct);
-                    result.InsertedRows += batchResult.Inserted;
-                    result.Errors.AddRange(batchResult.Errors);
-                    batch.Clear();
-                    _progressService.Report(progressId, result.TotalRows, result.InsertedRows, result.FailedRows, "Importing data...");
-                }
             }
 
-            if (batch.Count > 0)
+            if (result.Errors.Count > 0 || batch.Count == 0)
             {
-                var batchResult = await _repository.BulkInsertAsync(batch, ct);
-                result.InsertedRows += batchResult.Inserted;
-                result.Errors.AddRange(batchResult.Errors);
+                if (result.Errors.Count == 0) result.Errors.Add("No accounting rows found. Existing data was not changed.");
+                _progressService.AddErrors(progressId, result.Errors);
+                _progressService.SetStatus(progressId, "Rejected - existing data was not changed");
+                _progressService.Complete(progressId);
+                return result;
             }
 
-            _progressService.CompleteStep(progressId, "Data Import", "Completed", $"{result.InsertedRows:N0} records imported, {result.FailedRows:N0} failed");
-            _progressService.AddErrors(progressId, result.Errors);
-            _progressService.Complete(progressId);
-
-            _cacheInvalidator.Invalidate(CacheDataDomains.Accounting);
+            _progressService.CompleteStep(progressId, "Data Analysis", "Completed", $"Validated {batch.Count:N0} accounting rows");
+            ct.ThrowIfCancellationRequested();
+            var published = await _repository.ReplaceAsync(batch, ct);
+            result.InsertedRows = published.Inserted;
+            ImportCompletion.Notify(result, progressId, CacheDataDomains.Accounting, _cacheInvalidator, _progressService, _logger);
 
             _logger.LogInformation("Accounting import complete. Total={Total} Inserted={Inserted} Failed={Failed}", result.TotalRows, result.InsertedRows, result.FailedRows);
 
             return result;
+        }
+
+        private static bool IsBlankRow(ExcelWorksheet ws, int row)
+            => Enumerable.Range(1, ws.Dimension?.End.Column ?? 0).All(column => string.IsNullOrWhiteSpace(ws.Cells[row, column].Text));
+
+        private static bool IsCashBasisFooter(ExcelWorksheet ws, int row)
+        {
+            var cells = Enumerable.Range(1, ws.Dimension?.End.Column ?? 0)
+                .Select(column => ws.Cells[row, column].Text.Trim())
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Take(2)
+                .ToArray();
+            return cells.Length == 1 && cells[0].EndsWith("Cash Basis", StringComparison.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, int> BuildColumnMap(OfficeOpenXml.ExcelWorksheet ws, int headerRow)
