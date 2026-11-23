@@ -1,0 +1,213 @@
+{
+  "settings": {
+    "components": {
+      "code": true,
+      "binaries": false
+    },
+    "targetId": ""
+  },
+  "analysisStartTime": "2026-11-23T10:41:42.3067282Z",
+  "analysisEndTime": "2026-11-23T10:41:43.0491163Z",
+  "privacyModeHelpUrl": "https://go.microsoft.com/fwlink/?linkid=2270980",
+  "stats": {
+    "summary": {
+      "projects": 4,
+      "issues": 1,
+      "incidents": 2,
+      "effort": 0
+    },
+    "charts": {
+      "severity": {
+        "Mandatory": 0,
+        "Optional": 0,
+        "Potential": 0,
+        "Information": 2
+      },
+      "category": {
+        "Pkg": 2
+      }
+    }
+  },
+  "projects": [
+    {
+      "path": "src\\Cya2.Application\\Cya2.Application.csproj",
+      "startingProject": true,
+      "issues": 0,
+      "storyPoints": 0,
+      "properties": {
+        "appName": "Cya2.Application",
+        "projectKind": "ClassLibrary",
+        "frameworks": [
+          "net10.0"
+        ],
+        "languages": [
+          "C#"
+        ],
+        "tools": [
+          "MSBuild"
+        ],
+        "isSdkStyle": true,
+        "isTestProject": false,
+        "numberOfFiles": 136,
+        "numberOfCodeFiles": 136,
+        "linesTotal": 11138,
+        "linesOfCode": 11138,
+        "totalApiScanned": 0,
+        "minLinesOfCodeToChange": 0,
+        "maxLinesOfCodeToChange": 0
+      },
+      "ruleInstances": [],
+      "features": []
+    },
+    {
+      "path": "src\\Cya2.Core\\Cya2.Core.csproj",
+      "startingProject": true,
+      "issues": 0,
+      "storyPoints": 0,
+      "properties": {
+        "appName": "Cya2.Core",
+        "projectKind": "ClassLibrary",
+        "frameworks": [
+          "net10.0"
+        ],
+        "languages": [
+          "C#"
+        ],
+        "tools": [
+          "MSBuild"
+        ],
+        "isSdkStyle": true,
+        "isTestProject": false,
+        "numberOfFiles": 62,
+        "numberOfCodeFiles": 62,
+        "linesTotal": 3217,
+        "linesOfCode": 3217,
+        "totalApiScanned": 0,
+        "minLinesOfCodeToChange": 0,
+        "maxLinesOfCodeToChange": 0
+      },
+      "ruleInstances": [],
+      "features": []
+    },
+    {
+      "path": "tools\\Cya2.DatabaseMigrator\\Cya2.DatabaseMigrator.csproj",
+      "startingProject": true,
+      "issues": 1,
+      "storyPoints": 0,
+      "properties": {
+        "appName": "Cya2.DatabaseMigrator",
+        "projectKind": "DotNetCoreApp",
+        "frameworks": [
+          "net10.0"
+        ],
+        "languages": [
+          "C#"
+        ],
+        "tools": [
+          "MSBuild"
+        ],
+        "isSdkStyle": true,
+        "isTestProject": false,
+        "numberOfFiles": 1,
+        "numberOfCodeFiles": 1,
+        "linesTotal": 269,
+        "linesOfCode": 269,
+        "totalApiScanned": 0,
+        "minLinesOfCodeToChange": 0,
+        "maxLinesOfCodeToChange": 0
+      },
+      "ruleInstances": [
+        {
+          "incidentId": "dcb8d9eb-688b-4b82-80a4-efdaccc2dd22",
+          "ruleId": "Pkg.0001",
+          "description": "Project references \u0027MySql.Data\u0027 9.7.0; proposed upgrade to 26.10.0.",
+          "projectPath": "tools\\Cya2.DatabaseMigrator\\Cya2.DatabaseMigrator.csproj",
+          "state": "Active",
+          "location": {
+            "snippetModel": {
+              "unrestricted": "MySql.Data, 9.7.0",
+              "protected": "MySql.Data, 9.7.0"
+            },
+            "kind": "File",
+            "path": "tools\\Cya2.DatabaseMigrator\\Cya2.DatabaseMigrator.csproj",
+            "snippet": "MySql.Data, 9.7.0",
+            "protectedSnippet": "MySql.Data, 9.7.0",
+            "label": "MySql.Data 9.7.0",
+            "properties": {
+              "PackageId": "MySql.Data",
+              "PackageVersion": "9.7.0",
+              "PackageNewVersion": "26.10.0",
+              "PackageReplacements": null
+            }
+          }
+        }
+      ],
+      "features": []
+    },
+    {
+      "path": "src\\Cya2.Infrastructure\\Cya2.Infrastructure.csproj",
+      "startingProject": true,
+      "issues": 1,
+      "storyPoints": 0,
+      "properties": {
+        "appName": "Cya2.Infrastructure",
+        "projectKind": "ClassLibrary",
+        "frameworks": [
+          "net10.0"
+        ],
+        "languages": [
+          "C#"
+        ],
+        "tools": [
+          "MSBuild"
+        ],
+        "isSdkStyle": true,
+        "isTestProject": false,
+        "numberOfFiles": 40,
+        "numberOfCodeFiles": 40,
+        "linesTotal": 5427,
+        "linesOfCode": 5427,
+        "totalApiScanned": 0,
+        "minLinesOfCodeToChange": 0,
+        "maxLinesOfCodeToChange": 0
+      },
+      "ruleInstances": [
+        {
+          "incidentId": "1e82823d-384e-4bf5-865a-b53979500a56",
+          "ruleId": "Pkg.0001",
+          "description": "Project references \u0027MySql.Data\u0027 9.7.0; proposed upgrade to 26.10.0.",
+          "projectPath": "src\\Cya2.Infrastructure\\Cya2.Infrastructure.csproj",
+          "state": "Active",
+          "location": {
+            "snippetModel": {
+              "unrestricted": "MySql.Data, 9.7.0",
+              "protected": "MySql.Data, 9.7.0"
+            },
+            "kind": "File",
+            "path": "src\\Cya2.Infrastructure\\Cya2.Infrastructure.csproj",
+            "snippet": "MySql.Data, 9.7.0",
+            "protectedSnippet": "MySql.Data, 9.7.0",
+            "label": "MySql.Data 9.7.0",
+            "properties": {
+              "PackageId": "MySql.Data",
+              "PackageVersion": "9.7.0",
+              "PackageNewVersion": "26.10.0",
+              "PackageReplacements": null
+            }
+          }
+        }
+      ],
+      "features": []
+    }
+  ],
+  "rules": {
+    "Pkg.0001": {
+      "id": "Pkg.0001",
+      "isFeature": false,
+      "description": "Project references a package included in this upgrade.\n\nThe project references one of the packages being upgraded. This finding records the reference (current and proposed version) so the assessment lists every affected project even when no breaking API changes were detected.",
+      "label": "Project references an upgraded package",
+      "severity": "Information",
+      "effort": 0
+    }
+  }
+}
