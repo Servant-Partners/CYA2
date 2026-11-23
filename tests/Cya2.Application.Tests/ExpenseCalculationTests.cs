@@ -35,6 +35,33 @@ public sealed class ExpenseCalculationTests
     }
 
     [Fact]
+    public void CounselingReimbursements_AreExpensesAndUseExpenseBalanceSigns()
+    {
+        var classification = new ExpenseClassificationService();
+        var processor = new AccountingTransactionProcessor(classification);
+        var account = new UserAccountContextAccount { AccountingClass = "Fund Class", AccountNumber = "123", BalanceAdjustment = 100m };
+        var rows = new List<AccountingRecord>
+        {
+            new() { AccountingClass = "Fund Class", Account = "Reimbursements:Counseling Reimburse", Amount = 25, Date = new DateTime(2025, 1, 2) },
+            new() { AccountingClass = "Fund Class", Account = "reimbursements:counseling reimburse", Amount = -5, Date = new DateTime(2025, 1, 3) },
+            new() { AccountingClass = "Fund Class", Account = "Reimbursements:Other", Amount = 7, Date = new DateTime(2025, 1, 3) },
+            new() { AccountingClass = "Other Class", AccountNumber = "999", Account = "Reimbursements:Counseling Reimburse", Amount = 50, Date = new DateTime(2025, 1, 3) }
+        };
+
+        var result = processor.Process(account, rows);
+        var reverse = new ReverseBalanceCalculationService(classification);
+        var forward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 1), 100m, new DateTime(2025, 1, 3));
+        var backward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 3), result.TotalBalance, new DateTime(2025, 1, 1));
+
+        Assert.Equal(20m, result.ExpenseTotal);
+        Assert.Equal(87m, result.TotalBalance);
+        Assert.Equal(2, result.ExpenseTransactions.Count);
+        Assert.Equal(7m, result.OtherTotal);
+        Assert.Equal(result.TotalBalance, forward.TotalBalance);
+        Assert.Equal(100m, backward.TotalBalance);
+    }
+
+    [Fact]
     public void AccountingTransactionProcessor_AppliesMatchingBeforeCategorizationAndBalance()
     {
         var processor = new AccountingTransactionProcessor(new ExpenseClassificationService());
