@@ -21,6 +21,24 @@ public sealed class DatabaseTests(MySqlFixture mysql, ITestOutputHelper output) 
     private static readonly AvailableDatabase Guard = new();
 
     [MySqlFact]
+    public async Task AccountingReadsWithNullClassUseAccountNumberWithoutMatchingEmptyClasses()
+    {
+        var db = await mysql.CreateDatabaseAsync();
+        var importer = new AccountingImportRepository(Config(db), NullLogger<AccountingImportRepository>.Instance, new NoProgress(), Guard);
+        var matching = new AccountingImportRowDto { AccountingClass = "Other Class", Date = Date, Num = "A", Amount = 10, AccountNumber = "1000", Account = "Test", Type = "Deposit" };
+        var emptyClass = new AccountingImportRowDto { AccountingClass = "", Date = Date, Num = "B", Amount = 20, AccountNumber = "2000", Account = "Test", Type = "Deposit" };
+        await importer.ReplaceAsync([matching, emptyClass], default);
+
+        var reader = new ExpenseReadRepository(Config(db), Guard, NullLogger<ExpenseReadRepository>.Instance);
+        var single = await reader.GetAccountingDataForAccountAsync(null, "1000", Date.AddDays(-1), Date.AddDays(1));
+        var batch = await reader.GetAccountingDataForAccountsAsync([(42, null, "1000"), (43, null, "2000")], Date.AddDays(-1), Date.AddDays(1));
+
+        Assert.Equal(10, Assert.Single(single).Amount);
+        Assert.Equal(10, Assert.Single(batch[42]).Amount);
+        Assert.Equal(20, Assert.Single(batch[43]).Amount);
+    }
+
+    [MySqlFact]
     public async Task SoftRecipientIdLinksDirectAcrossFundsAndSurvivesRelinkAndRollback()
     {
         var db = await mysql.CreateDatabaseAsync();

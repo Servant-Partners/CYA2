@@ -11,7 +11,7 @@ public readonly record struct UserDonationDataCacheKey(
 public readonly record struct UserAccountingDataCacheKey(
     string UserId,
     int AccountId,
-    string AccountingClass,
+    string? AccountingClass,
     string AccountNumber,
     long AccountingGeneration)
 {

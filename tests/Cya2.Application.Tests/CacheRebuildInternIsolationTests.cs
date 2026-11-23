@@ -153,7 +153,7 @@ public sealed class CacheRebuildInternIsolationTests
         public int[] AccountIds { get; private set; } = [];
         public DateTime StartDate { get; private set; }
         public List<AccountingRecord> Rows { get; init; } = [];
-        public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string AccountingClass, string AccountNumber)> accounts, DateTime start, DateTime end)
+        public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string? AccountingClass, string AccountNumber)> accounts, DateTime start, DateTime end)
         {
             AccountIds = accounts.Select(a => a.AccountId).ToArray();
             StartDate = start;
@@ -161,7 +161,7 @@ public sealed class CacheRebuildInternIsolationTests
                 account => Rows.Where(row => row.Date >= start && row.Date <= end &&
                     (row.AccountNumber == account.AccountNumber || row.AccountingClass == account.AccountingClass)).ToList()));
         }
-        public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string accountingClass, string accountNumber, DateTime start, DateTime end) => throw new NotImplementedException();
+        public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string? accountingClass, string accountNumber, DateTime start, DateTime end) => throw new NotImplementedException();
     }
 
     private sealed class Dashboard : IFinancialDashboardService

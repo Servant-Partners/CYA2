@@ -4,7 +4,7 @@ public interface IAccountBalanceCache
 {
     bool TryGet(
         int accountId,
-        string accountingClass,
+        string? accountingClass,
         string accountNumber,
         decimal balanceAdjustment,
         long generation,
@@ -14,7 +14,7 @@ public interface IAccountBalanceCache
 
     void Set(
         int accountId,
-        string accountingClass,
+        string? accountingClass,
         string accountNumber,
         decimal balanceAdjustment,
         long generation,

@@ -13,7 +13,7 @@ public readonly record struct DonationDataCacheKey(
 
 public readonly record struct AccountingDataCacheKey(
     int AccountId,
-    string AccountingClass,
+    string? AccountingClass,
     string AccountNumber,
     long AccountingGeneration,
     DateTime WindowStart,
