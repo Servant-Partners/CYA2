@@ -19,18 +19,24 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICacheDataVersionProvider, MySqlCacheDataVersionProvider>();
 
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IUserAdministrationStore, UserAdministrationStore>();
+        services.AddScoped<IUserBatchAdministrationStore, UserAdministrationStore>();
         services.AddScoped<IUserAccountAccessRepository, UserAccountAccessRepository>();
         services.AddScoped<IAccountRepository, AccountRepository>();
+        services.AddScoped<IInternAccountStore, InternAccountStore>();
         services.AddScoped<ISubAccountRepository, SubAccountRepository>();
         services.AddScoped<IDonationReadRepository, DonationReadRepository>();
+        services.AddScoped<IDonationAccountMappingReader, DonationAccountMappingReader>();
         services.AddScoped<IDonorContactReadRepository, DonorContactReadRepository>();
         services.AddScoped<IExpenseReadRepository, ExpenseReadRepository>();
         services.AddScoped<IDonationRepository, DonationRepository>();
         services.AddScoped<IAccountingImportRepository, AccountingImportRepository>();
         services.AddScoped<IAccountImportService, AccountImportService>();
+        services.AddScoped<IUserImportService, UserImportService>();
         services.AddScoped<IRollbackRepository, RollbackRepository>();
         services.AddScoped<IAuditEventRepository, AuditEventRepository>();
         services.AddScoped<IImportProcessor, DonationImportProcessor>();
+        services.AddSingleton<IDonationWorkbookReader>(_ => new DonationWorkbookReader());
         services.AddScoped<IImportProcessor, AccountingImportProcessor>();
         services.AddScoped<IDonationImportMaintenanceService, DonationImportProcessor>();
         services.AddSingleton<DonorIdentityResolver>();

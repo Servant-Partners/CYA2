@@ -13,8 +13,115 @@ namespace Cya2.Database.Tests;
 
 public sealed class ImportValidationTests
 {
-    private static readonly string[] DonationHeaders = ["Gift Date", "Name", "Gift Payment Type", "Gift Type", "Fund Split Amount", "Fund Notes", "Soft Credit Recipient Name", "Preferred Address Line 1", "Preferred City", "Preferred State", "Preferred ZIP", "Preferred Country", "Personal Email Number", "Home Phone Number", "Personal Mobile Phone Number", "Gift Is Anonymous", "Gift Import ID", "Primary Addressee", "Honor/Memorial Name"];
+    private static readonly string[] DonationHeaders = ["Gift Date", "Name", "Gift Payment Type", "Gift Type", "Fund Split Amount", "Fund Notes", "Soft Credit Recipient Name", "Preferred Address Line 1", "Preferred City", "Preferred State", "Preferred ZIP", "Preferred Country", "Personal Email Number", "Home Phone Number", "Personal Mobile Phone Number", "Gift Is Anonymous", "Gift Import ID", "Primary Addressee", "Honor/Memorial Name", "Constituent ID", "Soft Credit Recipient ID", "Tribute System Record ID"];
     private static readonly string[] AccountingHeaders = ["Class", "Date", "Num", "Amount", "Account #", "Account", "Type"];
+
+    [Fact]
+    public async Task ConstituentColumnIsRequiredButBlankValuesAreAllowed()
+    {
+        var repository = new Repository();
+        using var source = Workbook("donations");
+        using var package = new ExcelPackage(source);
+        package.Workbook.Worksheets[0].Cells[1, 20].Value = "Other";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Contains("Missing column: Constituent ID", result.Errors);
+        Assert.Equal(0, repository.Writes);
+    }
+
+    [Fact]
+    public async Task ConstituentIdsPreserveZerosAndSoftCreditContactsAreExcluded()
+    {
+        var repository = new Repository();
+        using var source = Workbook("donations");
+        using var package = new ExcelPackage(source);
+        var sheet = package.Workbook.Worksheets[0];
+        sheet.Cells[2, 20].Value = "000123";
+        sheet.Cells[3, 20].Value = "organization-1";
+        sheet.Cells[3, 21].Value = "000123";
+        sheet.Cells[3, 2].Value = "Employer Organization";
+        sheet.Cells[3, 18].Value = "Employer Organization";
+        sheet.Cells[3, 7].Value = "Synthetic Donor";
+        sheet.Cells[3, 13].Value = "organization@example.invalid";
+        sheet.Cells[3, 17].Value = sheet.Cells[2, 17].Value;
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Empty(result.Errors);
+        Assert.Equal(2, repository.Published.Count);
+        Assert.Equal("000123", repository.Published[0].ConstituentId);
+        Assert.Equal("organization-1", repository.Published[1].ConstituentId);
+        Assert.All(repository.Published, row => Assert.Equal("id:000123", row.Donor.IdentityKey));
+        Assert.True(repository.Published[1].IsSoftCredit);
+        Assert.Empty(repository.Published[1].Contacts);
+    }
+
+    [Fact]
+    public async Task MissingSoftRecipientHeaderRejectsUpload()
+    {
+        var repository = new Repository();
+        using var source = Workbook("donations");
+        using var package = new ExcelPackage(source);
+        package.Workbook.Worksheets[0].Cells[1, 21].Value = "Other";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Contains("Missing column: Soft Credit Recipient ID", result.Errors);
+        Assert.Equal(0, repository.Writes);
+    }
+
+    [Fact]
+    public async Task ThirdPartyRecipientIdMatchesDirectDonorAndPreservesSourceIds()
+    {
+        var repository = new Repository();
+        using var source = Workbook("donations");
+        using var package = new ExcelPackage(source);
+        var sheet = package.Workbook.Worksheets[0];
+        sheet.Cells[2, 20].Value = "000123";
+        sheet.Cells[3, 20].Value = "organization-1";
+        sheet.Cells[3, 21].Value = "000123";
+        sheet.Cells[3, 2].Value = sheet.Cells[3, 18].Value = "Synthetic Employer";
+        sheet.Cells[3, 7].Value = "Different Display Name";
+        sheet.Cells[3, 13].Value = "employer@example.invalid";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Empty(result.Errors);
+        Assert.All(repository.Published, row => Assert.Equal("id:000123", row.Donor.IdentityKey));
+        Assert.Equal("organization-1", repository.Published[1].ConstituentId);
+        Assert.Equal("000123", repository.Published[1].SoftCreditRecipientId);
+        Assert.Empty(repository.Published[1].Contacts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecipientIdDoesNotOverrideDirectOrAnonymousIdentity(bool anonymous)
+    {
+        var repository = new Repository();
+        using var source = Workbook("donations");
+        using var package = new ExcelPackage(source);
+        var sheet = package.Workbook.Worksheets[0];
+        sheet.Cells[2, 20].Value = "direct";
+        sheet.Cells[2, 21].Value = "soft-id";
+        sheet.Cells[2, 7].Value = "Synthetic Donor";
+        if (anonymous) sheet.Cells[2, 16].Value = "Yes";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Empty(result.Errors);
+        Assert.Equal(anonymous ? "anonymous:id:direct" : "id:direct", repository.Published[0].Donor.IdentityKey);
+        if (anonymous) Assert.Null(repository.Published[0].SoftCreditRecipientId);
+    }
+
+    [Fact]
+    public async Task TooLongRecipientIdRejectsWholeUpload()
+    {
+        var repository = new Repository();
+        using var source = Workbook("donations");
+        using var package = new ExcelPackage(source);
+        package.Workbook.Worksheets[0].Cells[2, 21].Value = new string('x', 256);
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.NotEmpty(result.Errors);
+        Assert.Equal(0, repository.Writes);
+    }
 
     [Theory]
     [InlineData("donations")]
@@ -32,6 +139,93 @@ public sealed class ImportValidationTests
         var result = await Processor(kind, repository, new Invalidator()).ProcessAsync(workbook, "test", default);
         Assert.NotEmpty(result.Errors);
         Assert.False(result.PublicationCommitted);
+        Assert.Equal(0, repository.Writes);
+    }
+
+    [Theory]
+    [InlineData(1, "Monday, Sep 14, 2026 04:21:03 PM GMT-7 - Cash Basis")]
+    [InlineData(7, "Friday, Jan 01, 2027 01:00:00 AM GMT-7 - CASH BASIS  ")]
+    public async Task AccountingCashBasisFooterAfterBlankRowsIsIgnored(int column, string footer)
+    {
+        var repository = new Repository();
+        using var source = Workbook("accounting");
+        using var package = new ExcelPackage(source);
+        var sheet = package.Workbook.Worksheets[0];
+        sheet.Cells[10, column].Value = footer;
+        sheet.Cells[12, 1].Style.Font.Bold = true;
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+
+        var result = await Processor("accounting", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+
+        Assert.Empty(result.Errors);
+        Assert.Equal(2, result.InsertedRows);
+        Assert.Equal(1, repository.Writes);
+    }
+
+    [Theory]
+    [InlineData(9, "Monday, Sep 14, 2026 04:21:03 PM GMT-7 - Cash Basis")]
+    [InlineData(10, "Monday, Sep 14, 2026 04:21:03 PM GMT-7 - Accrual Basis")]
+    public async Task AccountingUnrecognizedFooterRejectsUpload(int row, string footer)
+    {
+        var repository = new Repository();
+        using var source = Workbook("accounting");
+        using var package = new ExcelPackage(source);
+        package.Workbook.Worksheets[0].Cells[row, 1].Value = footer;
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+
+        var result = await Processor("accounting", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+
+        Assert.NotEmpty(result.Errors);
+        Assert.Equal(0, repository.Writes);
+    }
+
+    [Fact]
+    public async Task AccountingTransactionAfterBlankRowsIsNotMistakenForFooter()
+    {
+        var repository = new Repository();
+        using var source = Workbook("accounting");
+        using var package = new ExcelPackage(source);
+        var sheet = package.Workbook.Worksheets[0];
+        sheet.Cells[7, 1, 7, 7].Copy(sheet.Cells[10, 1]);
+        sheet.Cells[10, 6].Value = "Synthetic Cash Basis";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+
+        var result = await Processor("accounting", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+
+        Assert.Empty(result.Errors);
+        Assert.Equal(3, result.InsertedRows);
+        Assert.Equal(1, repository.Writes);
+    }
+
+    [Fact]
+    public async Task AccountingMalformedTransactionStillRejectsUploadWithFooter()
+    {
+        var repository = new Repository();
+        using var source = Workbook("accounting", invalid: true);
+        using var package = new ExcelPackage(source);
+        package.Workbook.Worksheets[0].Cells[10, 1].Value = "Monday, Sep 14, 2026 04:21:03 PM GMT-7 - Cash Basis";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+
+        var result = await Processor("accounting", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+
+        Assert.NotEmpty(result.Errors);
+        Assert.Equal(0, repository.Writes);
+    }
+
+    [Fact]
+    public async Task AccountingCashBasisRowBeforeLastPopulatedRowIsNotIgnored()
+    {
+        var repository = new Repository();
+        using var source = Workbook("accounting");
+        using var package = new ExcelPackage(source);
+        var sheet = package.Workbook.Worksheets[0];
+        sheet.Cells[10, 1].Value = "Monday, Sep 14, 2026 04:21:03 PM GMT-7 - Cash Basis";
+        sheet.Cells[11, 1].Value = "Unexpected data";
+        using var workbook = new MemoryStream(package.GetAsByteArray());
+
+        var result = await Processor("accounting", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+
+        Assert.NotEmpty(result.Errors);
         Assert.Equal(0, repository.Writes);
     }
 
@@ -65,7 +259,7 @@ public sealed class ImportValidationTests
     }
 
     [Fact]
-    public async Task FrequencyHistoryMatchesResolvedIdentityNotSourceName()
+    public async Task FrequencyClassificationIsDeferredToFinalRepositoryHistory()
     {
         var repository = new Repository();
         repository.HistoryFactory = keys =>
@@ -78,8 +272,10 @@ public sealed class ImportValidationTests
             }).ToList();
         };
         using var workbook = Workbook("donations");
-        await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
-        Assert.All(repository.Published, row => Assert.Equal(Cya2.Core.Enums.DonorFrequency.Monthly, row.Frequency));
+        var result = await Processor("donations", repository, new Invalidator()).ProcessAsync(workbook, "test", default);
+        Assert.Empty(result.Errors);
+        Assert.Equal(2, repository.Published.Count);
+        Assert.All(repository.Published, row => Assert.Null(row.Frequency));
     }
 
     [Theory]
@@ -199,6 +395,7 @@ public sealed class ImportValidationTests
                     "Name" or "Primary Addressee" => "Synthetic Donor",
                     "Fund Notes" => "Synthetic Fund",
                     "Gift Import ID" => $"synthetic-{row}",
+                    "Constituent ID" => "000synthetic",
                     "Class" => "Synthetic Class",
                     "Account" => "Synthetic Account",
                     "Account #" => "1000",

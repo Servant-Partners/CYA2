@@ -61,7 +61,7 @@ public class UserAccountContextService : IUserAccountContextService
             }
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            _logger.LogInformation("User account context phase=user-start user={UserId}", normalizedUserId);
+            _logger.LogInformation("User account context phase=user-start");
             var user = currentUser;
             // _logger.LogInformation("User account context phase=user-complete elapsedMs={ElapsedMs} found={Found}", stopwatch.ElapsedMilliseconds, user is not null);
             if (user == null)
@@ -74,19 +74,18 @@ public class UserAccountContextService : IUserAccountContextService
             var isViewer = string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
 
             var canAccessAllAccounts = isAdmin || isViewer;
+            var accounts = await GetAccountsAsync(user.Id, canAccessAllAccounts, false);
 
             var context = new UserAccountContext
             {
                 UserId = user.Id,
                 IsAdminOrViewer = canAccessAllAccounts,
                 IsViewer = isViewer,
-                IsIntern = user.IsIntern(),
-                InternName = user.IsIntern()
-                    ? InternAccountUtility.GetInternNameFromUserName(user.Name)
-                    : string.Empty,
+                IsIntern = false,
+                InternName = string.Empty,
                 DefaultAccountId = user.DefaultAccount,
                 CacheVersion = contextGeneration,
-                Accounts = await GetAccountsAsync(user.Id, canAccessAllAccounts, user.IsIntern())
+                Accounts = accounts
             };
 
 
@@ -104,7 +103,7 @@ public class UserAccountContextService : IUserAccountContextService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to build user account context for identifier {UserId}", normalizedUserId);
+            _logger.LogError("Failed to build user account context. ExceptionType={ExceptionType}", ex.GetType().Name);
             return null;
         }
     }
@@ -118,11 +117,11 @@ public class UserAccountContextService : IUserAccountContextService
 
         var selected = !string.IsNullOrWhiteSpace(preferredIdentity)
             ? context.Accounts.FirstOrDefault(a =>
-                // Intern selectors retain InternName as their value because a shared fund can contain multiple interns' donation data.
+                // InternName carries the opaque source ID; its casing is part of the identity.
                 string.Equals(
                     string.IsNullOrWhiteSpace(a.InternName) ? a.Fund : a.InternName,
                     preferredIdentity,
-                    StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(a.InternName) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
                 string.Equals(a.Fund, preferredIdentity, StringComparison.OrdinalIgnoreCase))
             : null;
 
@@ -252,7 +251,6 @@ public class UserAccountContextService : IUserAccountContextService
             Overhead = a.Overhead,
             SoftCredit = a.SoftCredit,
             BalanceAdjustment = a.BalanceAdjustment,
-            OtherFunds = a.OtherFunds,
             InternName = a.InternName,
             DisplayName = a.DisplayName
         }).ToList();
@@ -267,7 +265,6 @@ public class UserAccountContextService : IUserAccountContextService
         Overhead = account.Overhead,
         SoftCredit = account.SoftCredit,
         BalanceAdjustment = account.BalanceAdjustment,
-        OtherFunds = account.OtherFunds,
         InternName = account.InternName,
         DisplayName = account.DisplayName
     };
@@ -282,14 +279,8 @@ public class UserAccountContextService : IUserAccountContextService
         Overhead = account.Overhead,
         SoftCredit = account.SoftCredit,
         BalanceAdjustment = account.BalanceAdjustment,
-        OtherFunds = account.OtherFunds,
-        // Derive the lookup identity from the intern account convention; AccountingClass is intentionally irrelevant for intern accounts.
-        InternName = InternAccountUtility.TryGetInternDesignationName(account.Fund, out var internName)
-            ? internName
-            : string.Empty,
-        DisplayName = InternAccountUtility.TryGetInternDesignationName(account.Fund, out internName)
-            ? internName
-            : account.Fund
+        InternName = account.AccountKind == "Intern" ? account.InternSourceId ?? string.Empty : string.Empty,
+        DisplayName = account.AccountKind == "Intern" ? account.DisplayName ?? string.Empty : account.Fund
     };
 
     private static UserAccountContext CloneContext(UserAccountContext source)
@@ -314,7 +305,6 @@ public class UserAccountContextService : IUserAccountContextService
                     Overhead = a.Overhead,
                     SoftCredit = a.SoftCredit,
                     BalanceAdjustment = a.BalanceAdjustment,
-                    OtherFunds = a.OtherFunds,
                     InternName = a.InternName,
                     DisplayName = a.DisplayName,
                 })

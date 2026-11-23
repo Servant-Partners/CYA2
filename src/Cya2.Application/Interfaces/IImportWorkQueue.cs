@@ -12,5 +12,6 @@ public sealed record ImportWorkItem(
 public interface IImportWorkQueue
 {
     ValueTask EnqueueAsync(ImportWorkItem workItem, CancellationToken cancellationToken = default);
+    bool RequestCancellation(string progressId, int actorUserId) => false;
 }
 

@@ -9,15 +9,19 @@ This is a .net 10 app that uses blazor, dapper and mysql, radzen components and 
 - When restoring previously working UI behavior, use the repository's Git baseline directly and adding new CSS workarounds.
 - Prioritize the best long-term data architecture over the smallest short-term change, especially for donation imports and donor/contact modeling.
 - AccountId is authoritative for the account relationship. Intern accounts contain donation and donor data only, with no accounting data. Merged subaccounts are semantically part of the primary account and should be combined into the primary reporting data; separate subaccounts remain distinguishable for separate views. Donor All views must combine donations across primary/separate funds and deduplicate donors who give to both, using donor identity rather than listing them twice.
-- Intern accounts are not fund-based. Intern donation lookups must use DonationData.InternName (the intern identity), never the shared Fund value, because a fund can contain data for multiple interns. Intern selector display/value handling must preserve InternName as the lookup identity. All account dropdowns must display intern accounts as '<intern name> (Intern)' while preserving the underlying intern identity/value for selection and DonationData.InternName lookups.
+- Intern accounts are non-login accounts identified by AccountKind and the opaque, case-sensitive InternSourceId. Donation lookups must match DonationData.InternSourceId, never Fund or display names. Legacy account-selection DTO members named InternName carry the source ID; display labels remain separate and show '<intern name> (Intern)'. Intern views depend on the selected account, not a login role.
+- Deleting accounts removes only configuration/access links, never donations, expenses, accounting transactions, or source evidence. Only upload/rollback processes may modify monetary transaction data.
 - Do not log intern names or Fund/SubFund values anywhere, including startup diagnostics; retain only non-personal metadata such as counts, kinds, ranges, and row counts.
 - Keep intern-related code comments and primary documentation up to date whenever intern behavior changes.
 - When an agreed implementation plan exists, follow it as the authoritative scope. Do not propose or ask to change the plan without explicitly stating that the suggestion would deviate from the agreed plan and explaining the deviation first.
 - User tests application behavior through the UI and expects diagnoses not to assume direct database edits when app-driven creation is being tested.
+- Intern user renaming is intended only to correct typos, not actual name changes; do not address actual intern name change/history continuity as an edge case.
+- Keep tests focused on current supported behavior. Remove obsolete assertions or test portions that only exercise unused legacy code; do not retain them as artificial failures.
 
 ## Data Management
 - The Donors and DonorContacts tables are application display projections, not the organization's official donor database. Contact data should be current-state only: each upload must remove contact values no longer present and retain DateCreated plus DateModified, without historical contact rows.
 - For CYA2, restricted audit-stream records may include internal numeric user IDs and should have a 90-day retention period. General diagnostic logs must continue to exclude personal values and sensitive account/intern data.
+- For CYA2 audit-failure signals, use monitoring logs only for now; do not add email, webhooks, or external alert delivery without a new decision.
 
 ## Database Schema Management
 - CYA2 is developing its initial database version. Until production, all schema changes must be incorporated into database/schema/001_InitialSchema.sql, not new incremental migrations; no schema migration history should be recorded during this pre-production development phase.

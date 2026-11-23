@@ -29,7 +29,6 @@ public sealed class UserAccountContextAccount
     public decimal Overhead { get; set; }
     public string SoftCredit { get; set; } = string.Empty;
     public decimal BalanceAdjustment { get; set; }
-    public bool OtherFunds { get; set; }
     public string InternName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
 }

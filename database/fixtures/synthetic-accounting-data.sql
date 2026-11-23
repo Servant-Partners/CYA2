@@ -14,9 +14,9 @@ WHERE Fund = @fixture_fund
   AND AccountNumber = '2200000';
 
 INSERT INTO Accounts
-	(Fund, AccountingClass, AccountNumber, Overhead, SoftCredit, BalanceAdjustment, OtherFunds)
+	(Fund, AccountingClass, AccountNumber, Overhead, SoftCredit, BalanceAdjustment)
 VALUES
-	(@fixture_fund, @fixture_class, '2200000', 0.00, '', 0.00, FALSE);
+	(@fixture_fund, @fixture_class, '2200000', 0.00, '', 0.00);
 
 INSERT INTO AccountingData
 	(AccountingClass, Date, Num, Amount, AccountNumber, Account, Type)

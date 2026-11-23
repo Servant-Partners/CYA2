@@ -46,6 +46,8 @@ public class UserSettingsService : IUserSettingsService
                 {
                     AccountId = a.AccountId,
                     Fund = a.Fund ?? string.Empty,
+                    InternName = a.InternName,
+                    DisplayName = string.IsNullOrWhiteSpace(a.InternName) ? a.DisplayName : a.DisplayName + " (Intern)",
                     AccountingClass = a.AccountingClass ?? string.Empty,
                     AccountNumber = a.AccountNumber ?? string.Empty,
                     Overhead = Convert.ToDecimal(a.Overhead)
@@ -56,7 +58,7 @@ public class UserSettingsService : IUserSettingsService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to load user settings for {UserIdentifier}", userIdentifier);
+            _logger.LogError("Failed to load user settings. ExceptionType={ExceptionType}", ex.GetType().Name);
             return null;
         }
     }
@@ -75,7 +77,7 @@ public class UserSettingsService : IUserSettingsService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to update default account for user {UserId}", userId);
+            _logger.LogError("Failed to update default account. ExceptionType={ExceptionType}", ex.GetType().Name);
             return false;
         }
     }
@@ -84,21 +86,11 @@ public class UserSettingsService : IUserSettingsService
     {
         try
         {
-            var user = await _userRepository.GetByIdAsync(userId);
-            if (user == null)
-            {
-                return false;
-            }
-
-            user.Language = NormalizeLanguage(language);
-            var updated = await _userRepository.UpdateAsync(user);
-
-            var success = updated != null && updated.Id == userId;
-            return success;
+            return await _userRepository.UpdateLanguageAsync(userId, NormalizeLanguage(language));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to update language for user {UserId}", userId);
+            _logger.LogError("Failed to update language. ExceptionType={ExceptionType}", ex.GetType().Name);
             return false;
         }
     }

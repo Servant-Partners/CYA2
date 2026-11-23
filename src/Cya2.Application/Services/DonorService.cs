@@ -69,30 +69,40 @@ namespace Cya2.Application.Services
             DateRange? dateRange,
             string userId = "")
         {
+            if (!string.IsNullOrWhiteSpace(account.InternName))
+            {
+                if (!string.Equals(selectedSubAccount, "Primary", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(selectedSubAccount, "All", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new List<DonorSummaryDto>();
+                }
+
+                var internFunds = new[] { InternAccountUtility.BuildInternFund(account.InternName) };
+                return dateRange is null
+                    ? await GetAllDonorSummariesAsync(internFunds)
+                    : await GetDonorSummariesForAccountFactsAsync(account, internFunds, dateRange, userId);
+            }
+
             var subAccounts = await GetSubAccountsForAccountAsync(account.AccountId);
             var separateFunds = subAccounts
                 .Where(subAccount => subAccount.IsSeparate())
                 .Select(subAccount => subAccount.SubFund)
                 .Where(fund => !string.IsNullOrWhiteSpace(fund))
                 .ToList();
+            var primaryFunds = new[] { account.Fund }.Concat(subAccounts
+                .Where(subAccount => subAccount.IsMerged())
+                .Select(subAccount => subAccount.SubFund));
 
             if (string.Equals(selectedSubAccount, "Primary", StringComparison.OrdinalIgnoreCase))
             {
                 return dateRange is null
-                    ? await GetAllDonorSummariesAsync(new[] { account.Fund })
-                    : await GetDonorSummariesForAccountFactsAsync(account, new[] { account.Fund }, dateRange!, userId);
+                    ? await GetAllDonorSummariesAsync(primaryFunds)
+                    : await GetDonorSummariesForAccountFactsAsync(account, primaryFunds, dateRange!, userId);
             }
 
             if (string.Equals(selectedSubAccount, "All", StringComparison.OrdinalIgnoreCase))
             {
-                if (separateFunds.Count == 0)
-                {
-                    return dateRange is null
-                        ? await GetAllDonorSummariesAsync(account.AccountId, account.Fund)
-                        : await GetDonorSummariesForAccountAsync(account, dateRange!, userId);
-                }
-
-                var funds = new[] { account.Fund }.Concat(separateFunds);
+                var funds = primaryFunds.Concat(separateFunds);
                 return dateRange is null
                     ? await GetAllDonorSummariesAsync(funds)
                     : await GetDonorSummariesForAccountFactsAsync(account, funds, dateRange!, userId);
@@ -114,9 +124,7 @@ namespace Cya2.Application.Services
                 }
             }
 
-            return dateRange is null
-                ? await GetAllDonorSummariesAsync(account.AccountId, account.Fund)
-                : await GetDonorSummariesForAccountAsync(account, dateRange!, userId);
+            return new List<DonorSummaryDto>();
         }
 
         public async Task<List<DonorSummaryDto>> GetMissingGiftDonorsAsync(AccountOptionDto account, DateRange dateRange)
@@ -145,6 +153,7 @@ namespace Cya2.Application.Services
                 .Where(summary => summary.HasMissingGiftAlert)
                 .Select(summary => new DonorSummaryDto
                 {
+                    DonorId = summary.DonorId,
                     Name = summary.Name,
                     Frequency = summary.Frequency,
                     HasMissingGiftAlert = true,
@@ -197,19 +206,31 @@ namespace Cya2.Application.Services
             var rangedDonations = donations
                 .Where(d => d.Date.Date >= dateRange.StartDate.Date && d.Date.Date <= dateRange.EndDate.Date)
                 .ToList();
-            await HydrateDonorContactsAsync(rangedDonations, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
 
             var missingGiftDonors = BuildDonorSummaries(DeduplicateDonations(rangedDonations))
                 .Where(summary => summary.HasMissingGiftAlert && summary.MissingMonths.Count > 0)
                 .Select(summary => new DonorSummaryDto
                 {
+                    DonorId = summary.DonorId,
                     Name = summary.Name,
                     Frequency = summary.Frequency,
                     HasMissingGiftAlert = true,
                     MissingMonths = summary.MissingMonths.ToList()
                 })
                 .ToList();
+
+            // Classify against the complete date scope before loading contacts for warning donors only.
+            var missingGiftDonorIds = missingGiftDonors
+                .Where(donor => donor.DonorId > 0)
+                .Select(donor => donor.DonorId)
+                .ToHashSet();
+            if (missingGiftDonorIds.Count > 0)
+            {
+                await HydrateDonorContactsAsync(
+                    rangedDonations.Where(donation => missingGiftDonorIds.Contains(donation.DonorId)),
+                    cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
 
             _missingGiftCache.Set(
                 account.AccountId,
@@ -483,6 +504,9 @@ namespace Cya2.Application.Services
                 .Where(d => string.Equals(ResolveDonorDisplayName(d), normalizedLookupName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
+            if (matchingDonations.Select(d => d.DonorId).Distinct().Count() > 1)
+                return null;
+
             await HydrateDonorContactsAsync(matchingDonations);
 
             var r = matchingDonations
@@ -636,7 +660,7 @@ namespace Cya2.Application.Services
                 .Select(d => new { Donation = d, Identity = ResolveDonorIdentity(d) })
                 .Where(x => !string.IsNullOrWhiteSpace(x.Identity.DisplayName))
                 .GroupBy(
-                    x => $"{x.Donation.DonorId}\u001F{x.Identity.DisplayName.Trim()}",
+                    x => x.Donation.DonorId > 0 ? $"id:{x.Donation.DonorId}" : $"name:{DonorIdentityResolver.NormalizeIdentityKey(x.Identity.DisplayName)}",
                     StringComparer.OrdinalIgnoreCase);
 
             // Use the latest available donation date in the loaded dataset as the
@@ -660,17 +684,25 @@ namespace Cya2.Application.Services
                 var fixedPhones = JoinContactValues(donorRows.Select(x => x.PhoneFixed));
                 var phones = JoinContactValues(donorRows.SelectMany(x => new[] { x.PhoneMobile, x.PhoneFixed }));
 
-                // Build gift records for frequency classification.
-                var giftHistory = donorRows
-                    .Select(x => new DonorGiftRecord { Date = x.Date, Amount = Convert.ToDecimal(x.Amount) })
-                    .OrderBy(x => x.Date)
+                // Patterns belong to donor/fund histories; combined selections only roll up their labels.
+                var fundPatterns = donorRows
+                    .GroupBy(row => row.Fund.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .Select(fund =>
+                    {
+                        var rows = fund.OrderBy(row => row.Date).ThenBy(row => row.Id).ToList();
+                        var history = rows.Select(row => new DonorGiftRecord
+                        {
+                            Date = row.Date, Amount = Convert.ToDecimal(row.Amount)
+                        }).ToList();
+                        return new
+                        {
+                            History = history,
+                            Frequency = rows[^1].Frequency ?? _frequencyService.ClassifyDonor(history)
+                        };
+                    })
                     .ToList();
-
-                // Use stored frequency from most recent donation if available,
-                // otherwise fall back to live classification.
-                var mostRecent = donorRows.OrderByDescending(x => x.Date).First();
-                var frequency = mostRecent.Frequency
-                    ?? _frequencyService.ClassifyDonor(giftHistory);
+                var frequencies = fundPatterns.Select(pattern => pattern.Frequency).Distinct().ToList();
+                var frequency = frequencies.Count == 1 ? frequencies[0] : DonorFrequency.Mixed;
 
                 var hasDirect = identities.Any(i => i.IsDirect);
                 var sourceOrganizations = identities
@@ -683,13 +715,15 @@ namespace Cya2.Application.Services
                 var sourceSummary = BuildSourceSummary(hasDirect, sourceOrganizations);
                 var donorDisplayName = identities.First().DisplayName;
 
-                // Detect missing gift alerts for monthly donors.
-                var missingAlerts = frequency == DonorFrequency.Monthly
-                    ? _missingGiftService.GetMissingGiftAlerts(donorDisplayName, giftHistory, dataFreshThrough)
-                    : new List<Cya2.Core.Services.MissingGiftAlert>();
+                // A Mixed label must not hide a monthly fund's warning or let another fund cover it.
+                var missingAlerts = fundPatterns.Where(pattern => pattern.Frequency == DonorFrequency.Monthly)
+                    .SelectMany(pattern => _missingGiftService.GetMissingGiftAlerts(donorDisplayName, pattern.History, dataFreshThrough))
+                    .OrderBy(alert => alert.ExpectedMonth)
+                    .ToList();
 
                 yield return new DonorSummaryDto
                 {
+                    DonorId = donorRows[0].DonorId,
                     Name = donorDisplayName,
                     SourceSummary = sourceSummary,
                     Total = donorRows.Sum(x => Convert.ToDecimal(x.Amount)),
@@ -704,7 +738,7 @@ namespace Cya2.Application.Services
                     Country = mostRecentWithAddress?.Country ?? string.Empty,
                     Frequency = frequency,
                     HasMissingGiftAlert = missingAlerts.Count > 0,
-                    MissingMonths = missingAlerts.Select(a => a.ExpectedMonthLabel).ToList()
+                    MissingMonths = missingAlerts.Select(a => a.ExpectedMonthLabel).Distinct().ToList()
                 };
             }
         }

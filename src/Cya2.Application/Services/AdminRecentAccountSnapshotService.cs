@@ -128,8 +128,7 @@ public sealed class AdminRecentAccountSnapshotService : IAdminRecentAccountSnaps
                 CreatedAt = account.CreatedAt,
                 Overhead = account.Overhead,
                 SoftCredit = account.SoftCredit ?? string.Empty,
-                BalanceAdjustment = account.BalanceAdjustment,
-                OtherFunds = account.OtherFunds
+                BalanceAdjustment = account.BalanceAdjustment
             };
 
             var queryRange = GetSnapshotQueryRange();
@@ -174,7 +173,7 @@ public sealed class AdminRecentAccountSnapshotService : IAdminRecentAccountSnaps
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Admin account cache warmup failed");
+            _logger.LogWarning("Admin account cache warmup failed. ExceptionType={ExceptionType}", ex.GetType().Name);
         }
         finally
         {

@@ -22,15 +22,6 @@
     <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
         <value>[base64 mime encoded serialized .NET Framework object]</value>
     </data>
-  <data name="From" xml:space="preserve">
-    <value>Desde</value>
-  </data>
-  <data name="Through" xml:space="preserve">
-    <value>hasta</value>
-  </data>
-  <data name="SelectDateRangeAndApply" xml:space="preserve">
-    <value>Seleccione un rango de fechas y seleccione Aplicar para ver el resumen.</value>
-  </data>
     <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
         <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
         <comment>This is a comment</comment>
@@ -250,7 +241,10 @@
     <value>Saldo de Fin de Año</value>
   </data>
   <data name="EnterUpdateEmail" xml:space="preserve">
-    <value>Ingrese actualice el correo</value>
+    <value>Ingrese el usuario del correo</value>
+  </data>
+  <data name="OrganizationEmailUsernameRequired" xml:space="preserve">
+    <value>Ingrese solo un usuario de correo válido, sin @scene8.net.</value>
   </data>
   <data name="EnterUpdateName" xml:space="preserve">
     <value>Ingrese o actualice el nombre</value>
@@ -408,6 +402,12 @@
   <data name="LoginAttemptNotCompleted" xml:space="preserve">
     <value>No se pudo completar su intento de inicio de sesión.</value>
   </data>
+  <data name="SafeOperationError" xml:space="preserve">
+    <value>No se pudo completar la operación. Inténtelo de nuevo.</value>
+  </data>
+  <data name="SafeDatabaseError" xml:space="preserve">
+    <value>La base de datos no está disponible en este momento. Inténtelo de nuevo.</value>
+  </data>
   <data name="TrySigningInAgain" xml:space="preserve">
     <value>Intente iniciar sesión nuevamente.</value>
   </data>
@@ -506,6 +506,9 @@
   </data>
   <data name="TotalDonationsLTM" xml:space="preserve">
     <value>Donaciones Totales (LTM)</value>
+  </data>
+  <data name="TotalDonationsLastTwelveMonths" xml:space="preserve">
+    <value>Donaciones Totales (Últimos doce meses)</value>
   </data>
   <data name="LastTwelveMonths" xml:space="preserve">
     <value>Últimos doce meses</value>
@@ -727,7 +730,7 @@
     <value>No se realizaron cambios en su cuenta predeterminada.</value>
   </data>
   <data name="DefaultAccountUpdatedImmediate" xml:space="preserve">
-    <value>La cuenta predeterminada se actualizó correctamente. Los cambios se aplicaron de inmediato.</value>
+    <value>La cuenta predeterminada se actualizó.</value>
   </data>
   <data name="DefaultAccountUpdateFailed" xml:space="preserve">
     <value>No se pudo actualizar la cuenta predeterminada.</value>
@@ -819,14 +822,8 @@
   <data name="NormalizeDonorNames" xml:space="preserve">
     <value>Normalizar Nombres de Donantes</value>
   </data>
-  <data name="NormalizeDonorNamesConfirmMessage" xml:space="preserve">
-    <value>Esto normalizará los nombres de donantes en DonationData y DonationDataBackup de 'Apellido, Nombre' a 'Nombre Apellido'. ¿Continuar?</value>
-  </data>
   <data name="RecategorizeDonations" xml:space="preserve">
     <value>Recategorizar Donaciones</value>
-  </data>
-  <data name="RecategorizeDonationsConfirmMessage" xml:space="preserve">
-    <value>Esto recategorizará todas las filas de DonationData (Mensual, Anual, Esporádica, Única) usando las reglas actuales de clasificación. ¿Continuar?</value>
   </data>
   <data name="NonMonthlyIncludesSporadicAndOneTimeDonations" xml:space="preserve">
     <value>No Mensual incluye donaciones Esporádicas y Únicas.</value>
@@ -990,4 +987,132 @@
   <data name="UserSettings" xml:space="preserve">
     <value>Configuración del usuario</value>
   </data>
+  <data name="InternAccount" xml:space="preserve">
+    <value>Cuenta de pasante</value>
+  </data>
+  <data name="InternName" xml:space="preserve">
+    <value>Nombre del pasante</value>
+  </data>
+  <data name="InternId" xml:space="preserve">
+    <value>ID del pasante</value>
+  </data>
+  <data name="InternAccountGuidance" xml:space="preserve">
+    <value>Debe coincidir con el ID de registro del sistema Tribute (Tribute System Record ID) de Razors Edge.</value>
+  </data>
+  <data name="CreateInternAccount" xml:space="preserve">
+    <value>Crear cuenta de pasante</value>
+  </data>
+  <data name="SaveInternAccount" xml:space="preserve">
+    <value>Guardar cuenta de pasante</value>
+  </data>
+  <data name="DeleteInternAccount" xml:space="preserve">
+    <value>Eliminar cuenta de pasante</value>
+  </data>
+  <data name="InternAccountSaved" xml:space="preserve">
+    <value>Cuenta de pasante guardada.</value>
+  </data>
+  <data name="InternAccountSaveFailed" xml:space="preserve">
+    <value>No se pudo guardar la cuenta. Compruebe el nombre y el ID único del pasante; luego actualice y verifique antes de volver a intentarlo.</value>
+  </data>
+  <data name="DeleteInternAccountConfirmation" xml:space="preserve">
+    <value>¿Estás segura de que quieres eliminar esta cuenta?</value>
+  </data>
+  <data name="InternAccountDeleted" xml:space="preserve">
+    <value>Cuenta eliminada.</value>
+  </data>
+  <data name="InternAccountDeleteFailed" xml:space="preserve">
+    <value>No se pudo confirmar la eliminación. Actualice y verifique antes de volver a intentarlo.</value>
+  </data>
+  <data name="UploadValidationFailed" xml:space="preserve">
+    <value>No se pudo completar la vista previa de la carga. Inténtelo de nuevo. Si el problema persiste, contacte a un administrador.</value>
+  </data>
+  <data name="UploadFileTooLarge" xml:space="preserve">
+    <value>El archivo supera el tamaño máximo permitido de {0:N0} KB.</value>
+  </data>
+  <data name="ImportElapsed" xml:space="preserve">
+    <value>Tiempo transcurrido: {0}</value>
+  </data>
+  <data name="ImportWorking" xml:space="preserve">
+    <value>Procesando…</value>
+  </data>
+  <data name="ImportSubmission" xml:space="preserve">
+    <value>Enviando la carga</value>
+  </data>
+  <data name="ImportSubmissionFailed" xml:space="preserve">
+    <value>No se pudo enviar la carga.</value>
+  </data>
+  <data name="ImportQueued" xml:space="preserve">
+    <value>Esperando en la cola</value>
+  </data>
+  <data name="ImportWriteGate" xml:space="preserve">
+    <value>Esperando las actualizaciones financieras</value>
+  </data>
+  <data name="ImportDatabaseLock" xml:space="preserve">
+    <value>Obteniendo el bloqueo de la base de datos</value>
+  </data>
+  <data name="ImportStaging" xml:space="preserve">
+    <value>Preparando los donantes temporales</value>
+  </data>
+  <data name="ImportStagingDonations" xml:space="preserve">
+    <value>Preparando las donaciones temporales</value>
+  </data>
+  <data name="ImportAffectedHistory" xml:space="preserve">
+    <value>Identificando el historial afectado</value>
+  </data>
+  <data name="ImportSnapshot" xml:space="preserve">
+    <value>Creando la copia para reversión</value>
+  </data>
+  <data name="ImportDonorWrites" xml:space="preserve">
+    <value>Actualizando los donantes</value>
+  </data>
+  <data name="ImportDonationWrites" xml:space="preserve">
+    <value>Guardando las donaciones</value>
+  </data>
+  <data name="ImportContactEvidence" xml:space="preserve">
+    <value>Cargando la evidencia de contacto</value>
+  </data>
+  <data name="ImportContactProjection" xml:space="preserve">
+    <value>Preparando los contactos actuales de los donantes</value>
+  </data>
+  <data name="ImportContactWrites" xml:space="preserve">
+    <value>Actualizando los contactos actuales</value>
+  </data>
+  <data name="ImportFrequencyHistory" xml:space="preserve">
+    <value>Cargando el historial de frecuencias</value>
+  </data>
+  <data name="ImportFrequencyCalculation" xml:space="preserve">
+    <value>Calculando las frecuencias de donación</value>
+  </data>
+  <data name="ImportFrequencyWrites" xml:space="preserve">
+    <value>Actualizando las frecuencias de donación</value>
+  </data>
+  <data name="ImportCommit" xml:space="preserve">
+    <value>Confirmando los cambios en la base de datos</value>
+  </data>
+  <data name="ImportCacheInvalidation" xml:space="preserve">
+    <value>Actualizando los datos en caché</value>
+  </data>
+  <data name="ImportSummaryPrepare" xml:space="preserve">
+    <value>1. Preparar la carga</value>
+  </data>
+  <data name="ImportSummaryBackup" xml:space="preserve">
+    <value>2. Respaldar los datos existentes</value>
+  </data>
+  <data name="ImportSummaryUpdate" xml:space="preserve">
+    <value>3. Actualizar los registros</value>
+  </data>
+  <data name="ImportSummaryFinish" xml:space="preserve">
+    <value>4. Finalizar la actualización</value>
+  </data>
+  <data name="ImportFailed" xml:space="preserve">
+    <value>No se pudo completar la actualización</value>
+  </data>
+  <data name="ImportCancelRequested" xml:space="preserve"><value>Cancelación solicitada</value></data>
+  <data name="ImportCancelUnavailable" xml:space="preserve"><value>La cancelación no está disponible. Es posible que la importación ya haya finalizado. Cerrar este diálogo no cancela la importación.</value></data>
+  <data name="FirstDonation" xml:space="preserve"><value>Primera donación:</value></data>
+  <data name="NumberOfRows" xml:space="preserve"><value>Número de filas:</value></data>
+  <data name="NumberOfDuplicateRowsRemoved" xml:space="preserve"><value>Número de filas duplicadas eliminadas:</value></data>
+  <data name="TotalNumberOfDonations" xml:space="preserve"><value>Número total de donaciones:</value></data>
+  <data name="DonationOldDateConsent" xml:space="preserve"><value>Entiendo que esta fecha tiene más de 380 días y se reemplazarán todas las donaciones en esa fecha o después.</value></data>
+  <data name="PreparingUploadPreview" xml:space="preserve"><value>Subiendo archivo.</value></data>
 </root>

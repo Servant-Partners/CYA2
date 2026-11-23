@@ -63,7 +63,6 @@ public sealed class ImportCacheInvalidator : IImportCacheInvalidator
     public void InvalidateAll()
     {
         Invalidate(CacheDataDomains.All);
-        _adminCacheWarmupCoordinator.QueueWarmup();
         _logger.LogInformation("All shared caches cleared after import/rollback");
     }
 
@@ -79,6 +78,13 @@ public sealed class ImportCacheInvalidator : IImportCacheInvalidator
         var hasAccountMetadata = domains.HasFlag(CacheDataDomains.AccountMetadata);
         var hasDonorContacts = domains.HasFlag(CacheDataDomains.DonorContacts);
         var hasAuthorization = domains.HasFlag(CacheDataDomains.Authorization);
+        if (hasAccountMetadata)
+        {
+            _donationDataCache.InvalidateAll();
+            _userDonationDataCache.InvalidateAll();
+            _donorCache.InvalidateAll();
+            _missingGiftCache.InvalidateAll();
+        }
         if (hasDonations)
         {
             _userDonationDataCache.RemoveStaleGenerations(_cacheInvalidationVersion.Donations);
@@ -124,7 +130,8 @@ public sealed class ImportCacheInvalidator : IImportCacheInvalidator
                 _accountingDataCache.RemoveStaleGenerations(_cacheInvalidationVersion.Accounting);
             _accountBalanceCache.RemoveStaleGeneration(_cacheInvalidationVersion.Current);
             _homeSummaryCache.RemoveStaleGenerations(_cacheInvalidationVersion.GetGeneration(
-                CacheDataDomains.Donations | CacheDataDomains.Accounting | CacheDataDomains.AccountMetadata));
+                CacheDataDomains.Donations | CacheDataDomains.Accounting | CacheDataDomains.AccountMetadata),
+                _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.AccountMetadata));
         }
 
         if (hasAccountMetadata || hasAuthorization)

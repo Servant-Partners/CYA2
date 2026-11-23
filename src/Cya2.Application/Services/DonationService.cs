@@ -44,7 +44,7 @@ public class DonationService : IDonationService
             var context = await _userAccountContextService.GetContextAsync(userId, isAdminOrViewer);
             if (context == null || (!context.IsIntern && (context.Accounts == null || context.Accounts.Count == 0)))
             {
-                _logger.LogWarning("Donation context unavailable for user '{UserId}' (isAdminOrViewer={IsAdminOrViewer})", userId, isAdminOrViewer);
+                _logger.LogWarning("Donation context unavailable (isAdminOrViewer={IsAdminOrViewer})", isAdminOrViewer);
                 return result; // no accounts available
             }
 
@@ -64,13 +64,11 @@ public class DonationService : IDonationService
                 AccountId = a.AccountId,
                 Fund = a.Fund,
                 InternName = context.IsIntern ? context.InternName : a.InternName,
-                DisplayName = context.IsIntern
-                    ? context.InternName
-                    : string.IsNullOrWhiteSpace(a.InternName) ? a.DisplayName : a.InternName,
+                DisplayName = string.IsNullOrWhiteSpace(a.InternName) ? a.DisplayName : a.DisplayName + " (Intern)",
                 AccountingClass = a.AccountingClass,
                 AccountNumber = a.AccountNumber,
                 Overhead = a.Overhead
-            }).GroupBy(a => a.SelectionKey, StringComparer.OrdinalIgnoreCase)
+            }).GroupBy(a => a.AccountId)
               .Select(group => group.First())
               .ToList();
 
@@ -230,7 +228,7 @@ public class DonationService : IDonationService
             result.Donations = donationRecords.Select(r => new DonationRowDto
             {
                 Date = r.Date,
-                Account = selectedIsInternAccount ? result.SelectedAccount : r.Fund,
+                Account = selectedIsInternAccount ? selected?.DisplayName ?? string.Empty : r.Fund,
                 DonorId = r.DonorId,
                 Donor = ResolveDonorDisplayName(r),
                 Amount = r.Amount,
@@ -249,9 +247,9 @@ public class DonationService : IDonationService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "Failed to load donation data for user '{UserId}' in range {StartDate:yyyy-MM-dd}..{EndDate:yyyy-MM-dd}",
-                userId,
+            _logger.LogError(
+                "Failed to load donation data. ExceptionType={ExceptionType}, range={StartDate:yyyy-MM-dd}..{EndDate:yyyy-MM-dd}",
+                ex.GetType().Name,
                 dateRange.StartDate,
                 dateRange.EndDate);
         }

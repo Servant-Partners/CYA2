@@ -34,17 +34,10 @@ public sealed class UserAuthorizationService : IUserAuthorizationService
             return user;
         }
 
-        var resolvedUser = await ResolveUserAsync(userIdentifier);
-        if (resolvedUser?.IsIntern() == true)
-        {
-            var internName = InternAccountUtility.GetInternNameFromUserName(resolvedUser.Name);
-            return string.Equals(internName, accountFund, StringComparison.OrdinalIgnoreCase)
-                ? user
-                : user with { IsAuthorized = false, Reason = "User is not assigned to this account." };
-        }
-
         var account = await _userAccountAccessRepository.GetUserAccountsAsync(user.UserId);
-        return account.Any(a => string.Equals(a.Fund, accountFund, StringComparison.OrdinalIgnoreCase))
+        return account.Any(a => a.AccountKind == "Intern"
+                ? string.Equals(a.InternSourceId, accountFund, StringComparison.Ordinal) || string.Equals(a.Fund, accountFund, StringComparison.Ordinal)
+                : string.Equals(a.Fund, accountFund, StringComparison.OrdinalIgnoreCase))
             ? user
             : user with { IsAuthorized = false, Reason = "User is not assigned to this account." };
     }
@@ -110,7 +103,7 @@ public sealed class UserAuthorizationService : IUserAuthorizationService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Unable to revalidate user authorization for identifier {UserIdentifier}", userIdentifier);
+            _logger.LogWarning("Unable to revalidate user authorization. ExceptionType={ExceptionType}", ex.GetType().Name);
             throw;
         }
     }

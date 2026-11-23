@@ -2,7 +2,7 @@ namespace Cya2.Core.Utilities;
 
 public static class InternAccountUtility
 {
-    // Intern identity is encoded in the fund value because it is used for account lifecycle and access, while donation lookup uses InternName.
+    // The label prefix is retained for existing presentation scopes; source IDs are stored separately on Accounts.
     public const string InternFundPrefix = "Intern: ";
 
     public static bool IsInternFund(string? fund)
@@ -189,6 +189,9 @@ public sealed record InternDesignationCriteria(
 
         return GetDisplayFundName(fund);
     }
+
+    public static string GetAccountSelectorDisplayName(Cya2.Core.Entities.Account account) =>
+        account.AccountKind == "Intern" ? $"{account.DisplayName} (Intern)" : GetAccountSelectorDisplayName(account.Fund);
 
     public static string GetAccountSelectorDisplayName(string? fund, string? internName)
     {

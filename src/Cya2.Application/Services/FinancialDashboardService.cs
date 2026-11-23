@@ -93,24 +93,24 @@ public class FinancialDashboardService : IFinancialDashboardService
             AccountingData = accounting
         };
         var now = DateTime.Now;
-        var generation = _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.Accounting | CacheDataDomains.AccountMetadata);
-        var key = new HomeSummaryCacheKey(account.AccountId, account.Fund, string.Empty, generation, now.Year, now.Month).Normalize();
+        var key = GetHomeSummaryCacheKey(contextAccount, now);
         await _homeSummaryCache.GetOrCreateAsync(key, token => BuildHomeSummaryCacheEntryAsync(contextAccount, cachedData, now, token), cancellationToken);
     }
 
-    public async Task WarmInternSummaryFromDataAsync(string internName, CacheRebuildData data, CancellationToken cancellationToken = default)
+    public async Task WarmInternSummaryFromDataAsync(Account sourceAccount, CacheRebuildData data, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(internName))
+        if (sourceAccount.AccountKind != "Intern" || string.IsNullOrWhiteSpace(sourceAccount.InternSourceId))
         {
             return;
         }
 
-        var account = new UserAccountContextAccount { InternName = internName };
+        var account = ToContextAccount(sourceAccount);
+        var internName = sourceAccount.InternSourceId;
+        account.InternName = internName;
         var donations = data.DonationsByInternName.TryGetValue(internName, out var rows) ? rows : [];
         var donationData = new DonationCalculationData { Donations = donations };
         var now = DateTime.Now;
-        var generation = _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.AccountMetadata);
-        var key = new HomeSummaryCacheKey(0, string.Empty, internName, generation, now.Year, now.Month).Normalize();
+        var key = GetInternSummaryCacheKey(account, now);
         await _homeSummaryCache.GetOrCreateAsync(
             key,
             token => Task.FromResult(BuildInternSummaryCacheEntry(account, donationData, now, token)),
@@ -222,7 +222,7 @@ public class FinancialDashboardService : IFinancialDashboardService
             return cachedBalance;
         }
 
-        if (TryGetCachedBalanceAnchor(account, generation, out var anchorDate, out var anchorBalance))
+        if (TryGetCachedBalanceAnchor(account, out var anchorDate, out var anchorBalance))
         {
             var dataStart = new[] { anchorDate, asOfDate.Date }.Min();
             var dataEnd = new[] { anchorDate, asOfDate.Date }.Max();
@@ -261,20 +261,14 @@ public class FinancialDashboardService : IFinancialDashboardService
 
     private bool TryGetCachedBalanceAnchor(
         UserAccountContextAccount account,
-        long generation,
         out DateTime anchorDate,
         out decimal anchorBalance)
     {
-        var key = new HomeSummaryCacheKey(
-            account.AccountId,
-            account.Fund,
-            account.InternName,
-            generation,
-            DateTime.Now.Year,
-            DateTime.Now.Month).Normalize();
+        var now = DateTime.Now;
+        var key = GetHomeSummaryCacheKey(account, now);
         if (_homeSummaryCache.TryGet(key, out var summaries))
         {
-            anchorDate = new DateTime(DateTime.Now.Year - 1, 1, 1).AddDays(-1);
+            anchorDate = new DateTime(now.Year - 1, 1, 1).AddDays(-1);
             anchorBalance = summaries.PriorYear.StartingBalance;
             return true;
         }
@@ -284,6 +278,15 @@ public class FinancialDashboardService : IFinancialDashboardService
         return false;
     }
 
+    private HomeSummaryCacheKey GetHomeSummaryCacheKey(UserAccountContextAccount account, DateTime now)
+    {
+        if (!string.IsNullOrWhiteSpace(account.InternName))
+            return GetInternSummaryCacheKey(account, now);
+
+        var generation = _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.Accounting | CacheDataDomains.AccountMetadata);
+        return new HomeSummaryCacheKey(account.AccountId, account.Fund, string.Empty, generation, now.Year, now.Month).Normalize();
+    }
+
     private async Task<FinancialDashboardDto> GetDashboardDataInternalAsync(
         string accountFund,
         string userId,
@@ -291,7 +294,7 @@ public class FinancialDashboardService : IFinancialDashboardService
         bool includeEmbeddedPayload)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        _logger.LogInformation("Dashboard load started: user={UserId}, mode={Mode}", userId, useSessionAccountDataCache ? "complete-cache" : "summary-direct");
+        _logger.LogInformation("Dashboard load started: mode={Mode}", useSessionAccountDataCache ? "complete-cache" : "summary-direct");
         try
         {
             var dashboard = new FinancialDashboardDto();
@@ -305,7 +308,7 @@ public class FinancialDashboardService : IFinancialDashboardService
                 userContext?.Accounts?.Count ?? 0);
             if (userContext == null)
             {
-                _logger.LogWarning("Dashboard user context could not be resolved for user identifier '{UserId}'", userId);
+                _logger.LogWarning("Dashboard user context could not be resolved");
                 return dashboard;
             }
 
@@ -324,19 +327,19 @@ public class FinancialDashboardService : IFinancialDashboardService
                         ? userContext.InternName
                         : string.IsNullOrWhiteSpace(a.InternName)
                         ? InternAccountUtility.GetDisplayFundName(a.Fund)
-                        : a.InternName,
+                        : a.DisplayName + " (Intern)",
                     AccountingClass = a.AccountingClass ?? string.Empty,
                     AccountNumber = a.AccountNumber ?? string.Empty,
                     Overhead = Convert.ToDecimal(a.Overhead),
                     IsDefault = userContext.DefaultAccountId.HasValue && a.AccountId == userContext.DefaultAccountId.Value
                 })
-                .GroupBy(a => a.SelectionKey, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(a => a.AccountId)
                 .Select(group => group.First())
                 .ToList();
 
             if (!dashboard.UserAccounts.Any())
             {
-                _logger.LogWarning("No dashboard accounts found for user '{UserId}'", userId);
+                _logger.LogWarning("No dashboard accounts found");
                 return dashboard;
             }
 
@@ -383,11 +386,11 @@ public class FinancialDashboardService : IFinancialDashboardService
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogWarning(ex, "Failed to preload donations for the selected account");
+                            _logger.LogWarning("Failed to preload donations for the selected account. ExceptionType={ExceptionType}", ex.GetType().Name);
                         }
         finally
         {
-            _logger.LogInformation("Dashboard load completed: user={UserId}, mode={Mode}, elapsedMs={ElapsedMs}", userId, useSessionAccountDataCache ? "complete-cache" : "summary-direct", stopwatch.ElapsedMilliseconds);
+            _logger.LogInformation("Dashboard load completed: mode={Mode}, elapsedMs={ElapsedMs}", useSessionAccountDataCache ? "complete-cache" : "summary-direct", stopwatch.ElapsedMilliseconds);
         }
                     }
 
@@ -401,13 +404,13 @@ public class FinancialDashboardService : IFinancialDashboardService
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogWarning(ex, "Failed to preload donations for the default account");
+                            _logger.LogWarning("Failed to preload donations for the default account. ExceptionType={ExceptionType}", ex.GetType().Name);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Error preloading embedded donation payloads for dashboard");
+                    _logger.LogWarning("Error preloading embedded donation payloads for dashboard. ExceptionType={ExceptionType}", ex.GetType().Name);
                 }
             }
 
@@ -433,7 +436,7 @@ public class FinancialDashboardService : IFinancialDashboardService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting dashboard data");
+            _logger.LogError("Error getting dashboard data. ExceptionType={ExceptionType}", ex.GetType().Name);
             return new FinancialDashboardDto();
         }
     }
@@ -457,18 +460,18 @@ public class FinancialDashboardService : IFinancialDashboardService
                     ? userContext.InternName
                     : string.IsNullOrWhiteSpace(a.InternName)
                     ? InternAccountUtility.GetDisplayFundName(a.Fund)
-                    : a.InternName,
+                    : a.DisplayName + " (Intern)",
                 AccountingClass = a.AccountingClass ?? string.Empty,
                 AccountNumber = a.AccountNumber ?? string.Empty,
                 Overhead = Convert.ToDecimal(a.Overhead),
                 IsDefault = userContext.DefaultAccountId.HasValue && a.AccountId == userContext.DefaultAccountId.Value
-            }).GroupBy(a => a.SelectionKey, StringComparer.OrdinalIgnoreCase)
+            }).GroupBy(a => a.AccountId)
               .Select(group => group.First())
               .ToList();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting user accounts for '{UserId}'", userId);
+            _logger.LogError("Error getting user accounts. ExceptionType={ExceptionType}", ex.GetType().Name);
             return new List<UserAccountDto>();
         }
     }
@@ -499,8 +502,7 @@ public class FinancialDashboardService : IFinancialDashboardService
                 return points;
             }
 
-            if (InternAccountUtility.IsInternFund(selectedAccount.Fund) &&
-                InternAccountUtility.TryGetInternDesignationName(selectedAccount.Fund, out var internDesignationName))
+            if (!string.IsNullOrWhiteSpace(selectedAccount.InternName))
             {
                 var monthlyDonationData = await _accountCalculationService.LoadDonationCalculationDataAsync(selectedAccount, userId, startDate, endDate);
                 var internCursor = new DateTime(startDate.Year, startDate.Month, 1);
@@ -578,7 +580,7 @@ public class FinancialDashboardService : IFinancialDashboardService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error building monthly visualization");
+            _logger.LogError("Error building monthly visualization. ExceptionType={ExceptionType}", ex.GetType().Name);
         }
 
         return points;
@@ -592,14 +594,6 @@ public class FinancialDashboardService : IFinancialDashboardService
         }
 
         var now = DateTime.Now;
-        var generation = _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.AccountMetadata);
-        var cacheKey = new HomeSummaryCacheKey(
-            selectedAccount.AccountId,
-            string.Empty,
-            selectedAccount.InternName,
-            generation,
-            now.Year,
-            now.Month).Normalize();
         var summaries = await GetOrCreateInternSummaryAsync(selectedAccount, userId, now, CancellationToken.None);
 
         dashboard.CurrentMonth = summaries.CurrentMonth;
@@ -616,18 +610,17 @@ public class FinancialDashboardService : IFinancialDashboardService
         DateTime now,
         CancellationToken cancellationToken)
     {
-        var generation = _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.AccountMetadata);
-        var cacheKey = new HomeSummaryCacheKey(
-            account.AccountId,
-            string.Empty,
-            account.InternName,
-            generation,
-            now.Year,
-            now.Month).Normalize();
+        var cacheKey = GetInternSummaryCacheKey(account, now);
         return _homeSummaryCache.GetOrCreateAsync(
             cacheKey,
             token => BuildInternSummaryCacheEntryAsync(account, userId, now, token),
             cancellationToken);
+    }
+
+    private HomeSummaryCacheKey GetInternSummaryCacheKey(UserAccountContextAccount account, DateTime now)
+    {
+        var generation = _cacheInvalidationVersion.GetGeneration(CacheDataDomains.Donations | CacheDataDomains.AccountMetadata);
+        return new HomeSummaryCacheKey(account.AccountId, string.Empty, account.InternName, generation, now.Year, now.Month).Normalize();
     }
 
     private async Task<HomeSummaryCacheEntry> BuildInternSummaryCacheEntryAsync(
@@ -696,12 +689,9 @@ public class FinancialDashboardService : IFinancialDashboardService
         var windowStart = new DateTime(now.Year - 1, 1, 1);
         var windowEnd = new DateTime(now.Year, 12, 31);
 
-        var generation = _cacheInvalidationVersion.GetGeneration(
-            CacheDataDomains.Donations | CacheDataDomains.Accounting | CacheDataDomains.AccountMetadata);
-        var isInternAccount = InternAccountUtility.IsInternFund(selectedAccount.Fund);
-        var cacheKey = isInternAccount
-            ? new HomeSummaryCacheKey(0, string.Empty, selectedAccount.InternName, generation, now.Year, now.Month).Normalize()
-            : new HomeSummaryCacheKey(selectedAccount.AccountId, selectedAccount.Fund, string.Empty, generation, now.Year, now.Month).Normalize();
+        var isInternAccount = !string.IsNullOrWhiteSpace(selectedAccount.InternName);
+        var cacheKey = GetHomeSummaryCacheKey(selectedAccount, now);
+        var generation = cacheKey.Generation;
 
         HomeSummaryCacheEntry cachedSummaries;
         if (_homeSummaryCache.TryGet(cacheKey, out var existingSummaries))
@@ -728,7 +718,7 @@ public class FinancialDashboardService : IFinancialDashboardService
                 cacheKey,
                 async cancellationToken =>
                 {
-                    var cachedData = await GetOrLoadAccountDataAsync(selectedAccount, windowStart, windowEnd);
+                    var cachedData = await GetOrLoadAccountDataAsync(selectedAccount, windowStart, windowEnd, includeAccountingHistory: true);
                     return await BuildHomeSummaryCacheEntryAsync(selectedAccount, cachedData, now, cancellationToken);
                 });
         }
@@ -783,7 +773,8 @@ public class FinancialDashboardService : IFinancialDashboardService
         UserAccountContextAccount account,
         DateTime windowStart,
         DateTime windowEnd,
-        string userId = "")
+        string userId = "",
+        bool includeAccountingHistory = false)
     {
         if (!string.IsNullOrWhiteSpace(userId))
         {
@@ -805,10 +796,16 @@ public class FinancialDashboardService : IFinancialDashboardService
         var donationEntry = await _donationDataCache.GetOrCreateAsync(
             donationKey,
             cancellationToken => _donationDataCacheLoader.LoadAsync(account, range, donationKey, cancellationToken));
-        var accountingKey = new AccountingDataCacheKey(account.AccountId, account.AccountingClass, account.AccountNumber, _cacheInvalidationVersion.Accounting, windowStart, windowEnd).Normalize();
-        var accountingEntry = await _accountingDataCache.GetOrCreateAsync(
-            accountingKey,
-            cancellationToken => _accountingDataCacheLoader.LoadAsync(account, range, accountingKey, cancellationToken));
+        var accountingRange = includeAccountingHistory
+            ? new Cya2.Core.ValueObjects.DateRange(DateTime.MinValue, windowEnd)
+            : range;
+        var accountingKey = new AccountingDataCacheKey(account.AccountId, account.AccountingClass, account.AccountNumber, _cacheInvalidationVersion.Accounting, accountingRange.StartDate, accountingRange.EndDate).Normalize();
+        // Cumulative balances need history, but lifetime rows must not replace the bounded shared facts.
+        var accountingEntry = includeAccountingHistory
+            ? await _accountingDataCacheLoader.LoadAsync(account, accountingRange, accountingKey)
+            : await _accountingDataCache.GetOrCreateAsync(
+                accountingKey,
+                cancellationToken => _accountingDataCacheLoader.LoadAsync(account, accountingRange, accountingKey, cancellationToken));
 
         return new DashboardAccountCacheData
         {
@@ -839,7 +836,8 @@ public class FinancialDashboardService : IFinancialDashboardService
                 Fund = record.Fund,
                 Addressee = record.Addressee,
                 SoftCreditName = record.SoftCreditName,
-                IsAnonymous = record.IsAnonymous
+                IsAnonymous = record.IsAnonymous,
+                IsSoftCredit = record.IsSoftCredit
             }).ToList(),
             SubAccounts = donationEntry.SubAccounts.Select(record => new SubAccount
             {
@@ -1013,14 +1011,15 @@ public class FinancialDashboardService : IFinancialDashboardService
     private static UserAccountContextAccount ToContextAccount(Account account) => new()
     {
         AccountId = account.AccountId,
+        InternName = account.AccountKind == "Intern" ? account.InternSourceId ?? string.Empty : string.Empty,
+        DisplayName = account.DisplayName ?? account.Fund,
         Fund = account.Fund ?? string.Empty,
         AccountingClass = account.AccountingClass ?? string.Empty,
         AccountNumber = account.AccountNumber ?? string.Empty,
         CreatedAt = account.CreatedAt,
         Overhead = account.Overhead,
         SoftCredit = account.SoftCredit ?? string.Empty,
-        BalanceAdjustment = account.BalanceAdjustment,
-        OtherFunds = account.OtherFunds
+        BalanceAdjustment = account.BalanceAdjustment
     };
 
     private sealed class HomeSummaryResult

@@ -9,6 +9,12 @@ public interface IDonationRepository
         IReadOnlyList<CanonicalDonationWriteModel> donations,
         CancellationToken cancellationToken);
 
+    Task<DonationImportPersistenceResult> ReplaceCanonicalDonationsAsync(
+        IReadOnlyList<CanonicalDonationWriteModel> donations,
+        CancellationToken cancellationToken,
+        Action<DonationPersistenceProgress> reportProgress)
+        => ReplaceCanonicalDonationsAsync(donations, cancellationToken);
+
     Task<List<DonationRecord>> GetRecentDonationsForDonorsAsync(
         IEnumerable<(string IdentityKey, string Fund)> donorKeys,
         DateTime beforeDate,

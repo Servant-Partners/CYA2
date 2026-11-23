@@ -80,15 +80,19 @@ namespace cya2.Controllers
                 return BadRequest("PreviewId is required");
             }
 
-            _logger.LogInformation("Confirming donation import for preview {PreviewId}", request.PreviewId);
+            _logger.LogInformation("Donation import confirmation requested.");
             try
             {
-                var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "donations", ct);
+                var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "donations", request.OldDateAcknowledged, ct);
                 return Ok(result);
             }
             catch (ImportAuthorizationException)
             {
                 return NotFound("The import is no longer available.");
+            }
+            catch (ImportUploadValidationException exception)
+            {
+                return BadRequest(exception.Message);
             }
         }
 
@@ -140,7 +144,7 @@ namespace cya2.Controllers
                 return BadRequest("PreviewId is required");
             }
 
-            _logger.LogInformation("Confirming accounting import for preview {PreviewId}", request.PreviewId);
+            _logger.LogInformation("Accounting import confirmation requested.");
             try
             {
                 var result = await _importService.ImportFromPreviewAsync(request.PreviewId, "accounting", ct);
@@ -159,14 +163,13 @@ namespace cya2.Controllers
                 await _antiforgery.ValidateRequestAsync(HttpContext);
                 return true;
             }
-            catch (AntiforgeryValidationException exception)
+            catch (AntiforgeryValidationException)
             {
-                _logger.LogWarning(exception,
-                    "Antiforgery validation failed for upload endpoint {Path}. HasHeaderToken={HasHeaderToken}, HasFormToken={HasFormToken}, ContentType={ContentType}",
-                    Request.Path,
+                _logger.LogWarning(
+                    "Antiforgery validation failed for upload endpoint. TraceId={TraceId}, HasHeaderToken={HasHeaderToken}, HasFormToken={HasFormToken}",
+                    HttpContext.TraceIdentifier,
                     Request.Headers.ContainsKey("RequestVerificationToken"),
-                    Request.HasFormContentType && Request.Form.ContainsKey("__RequestVerificationToken"),
-                    Request.ContentType ?? string.Empty);
+                    Request.HasFormContentType && Request.Form.ContainsKey("__RequestVerificationToken"));
                 return false;
             }
         }
@@ -175,5 +178,6 @@ namespace cya2.Controllers
     public sealed class ConfirmImportRequest
     {
         public string PreviewId { get; set; } = string.Empty;
+        public bool OldDateAcknowledged { get; set; }
     }
 }

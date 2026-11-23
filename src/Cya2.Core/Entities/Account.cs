@@ -5,6 +5,9 @@ namespace Cya2.Core.Entities;
 public class Account : BaseEntity
 {
     public int AccountId { get; set; }
+    public string AccountKind { get; set; } = "Primary";
+    public string? InternSourceId { get; set; }
+    public string? DisplayName { get; set; }
     
     public string Fund { get; set; } = string.Empty; // Corresponds to "Fund Notes" from Donation DataTable
     
@@ -20,7 +23,6 @@ public class Account : BaseEntity
     // Additional properties
     public string SoftCredit { get; set; } = string.Empty;
     public decimal BalanceAdjustment { get; set; }
-    public bool OtherFunds { get; set; } = false;
 
     // Parameterless constructor
     public Account() { }

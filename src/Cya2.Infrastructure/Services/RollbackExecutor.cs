@@ -144,39 +144,20 @@ namespace Cya2.Infrastructure.Services
 
                     var backupTransaction = (MySqlTransaction)tx;
 
-                    // Remove only the donation range replaced by the import.
+                    // Shared donor resolution can relink retained gifts, so restore the complete snapshot.
                     var clearCmd = conn.CreateCommand();
                     clearCmd.Transaction = backupTransaction;
                     clearCmd.CommandTimeout = 300;
-                    clearCmd.CommandText = "DELETE FROM DonationData WHERE Date >= @SourceRangeStart";
-                    clearCmd.Parameters.AddWithValue("@SourceRangeStart", sourceRangeStart.Value);
+                    clearCmd.CommandText = "DELETE FROM DonationData; DELETE FROM DonorContacts; DELETE FROM Donors;";
                     var deletedRows = await clearCmd.ExecuteNonQueryAsync(cancellationToken);
-
-                    var restoreDonors = conn.CreateCommand();
-                    restoreDonors.Transaction = backupTransaction;
-                    restoreDonors.CommandTimeout = 300;
-                    restoreDonors.CommandText = @"
-UPDATE Donors donor
-INNER JOIN DonorsBackup backup
-    ON backup.BackupId = @BackupId
-   AND backup.Id = donor.Id
-SET donor.Fund = backup.Fund,
-    donor.DisplayName = backup.DisplayName,
-    donor.IdentityKey = backup.IdentityKey,
-    donor.ResolutionSource = backup.ResolutionSource,
-    donor.ResolutionVersion = backup.ResolutionVersion,
-    donor.DateCreated = backup.DateCreated,
-    donor.DateModified = backup.DateModified";
-                    restoreDonors.Parameters.AddWithValue("@BackupId", latestBackupId);
-                    await restoreDonors.ExecuteNonQueryAsync(cancellationToken);
 
                     var insertMissingDonors = conn.CreateCommand();
                     insertMissingDonors.Transaction = backupTransaction;
                     insertMissingDonors.CommandTimeout = 300;
                     insertMissingDonors.CommandText = @"
 INSERT INTO Donors
-    (Id, Fund, DisplayName, IdentityKey, ResolutionSource, ResolutionVersion, DateCreated, DateModified)
-SELECT backup.Id, backup.Fund, backup.DisplayName, backup.IdentityKey,
+    (Id, ConstituentId, DisplayName, IdentityKey, ResolutionSource, ResolutionVersion, DateCreated, DateModified)
+SELECT backup.Id, backup.ConstituentId, backup.DisplayName, backup.IdentityKey,
        backup.ResolutionSource, backup.ResolutionVersion, backup.DateCreated, backup.DateModified
 FROM DonorsBackup backup
 LEFT JOIN Donors donor ON donor.Id = backup.Id
@@ -218,10 +199,10 @@ WHERE backup.BackupId = @BackupId";
                         INSERT INTO DonationData
                         (Id, DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType,
                          Amount, Fund, InternName, PrimaryAddressee, SoftCreditName,
-                         IsAnonymous, Frequency, DateCreated)
+                         IsAnonymous, Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson)
                          SELECT Id, DonorId, Date, GiftImportId, AccountName, PaymentMethod, GiftType,
                                  Amount, Fund, InternName, PrimaryAddressee, SoftCreditName,
-                                COALESCE(IsAnonymous, 0), Frequency, DateCreated
+                                COALESCE(IsAnonymous, 0), Frequency, DateCreated, ConstituentId, SoftCreditRecipientId, IsSoftCredit, InternSourceId, SourceEvidenceJson
                          FROM DonationDataBackup
                          WHERE BackupId = @BackupId
                            AND Id <> 0";
@@ -250,6 +231,7 @@ WHERE donation.Id IS NULL
                     pinCmd.Parameters.Add(new MySqlParameter("@BackupId", latestBackupId));
                     await pinCmd.ExecuteNonQueryAsync(cancellationToken);
 
+                    await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.DonationRollbackCompleted, _logger, restoredRows, cancellationToken: cancellationToken);
                     await ImportTransaction.CommitAsync(tx, connStr, "DonationBackupSnapshots", latestBackupId, cancellationToken, requirePinned: true);
 
                     result.Success = true;
@@ -268,9 +250,10 @@ WHERE donation.Id IS NULL
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error during donation rollback");
+                _logger.LogError("Error during donation rollback. ExceptionType={ExceptionType}", ex.GetType().Name);
                 result.Success = false;
                 result.OutcomeUnknown = ex is ImportOutcomeUnknownException;
+                result.Cancelled = ex is OperationCanceledException;
                 result.ErrorMessage = result.OutcomeUnknown
                     ? "The donation rollback outcome could not be confirmed. Reconcile the latest snapshot before retrying."
                     : "Donation rollback did not complete. Refresh the backup status before retrying.";
@@ -394,6 +377,7 @@ WHERE donation.Id IS NULL
                     pinCmd.Parameters.Add(new MySqlParameter("@BackupId", latestBackupId));
                     await pinCmd.ExecuteNonQueryAsync(cancellationToken);
 
+                    await TransactionalAudit.RecordAsync(conn, tx, AuditEventTypes.AccountingRollbackCompleted, _logger, restoredRows, cancellationToken: cancellationToken);
                     await ImportTransaction.CommitAsync(tx, connStr, "AccountingBackupSnapshots", latestBackupId, cancellationToken, requirePinned: true);
 
                     result.Success = true;
@@ -412,9 +396,10 @@ WHERE donation.Id IS NULL
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error during accounting rollback");
+                _logger.LogError("Error during accounting rollback. ExceptionType={ExceptionType}", ex.GetType().Name);
                 result.Success = false;
                 result.OutcomeUnknown = ex is ImportOutcomeUnknownException;
+                result.Cancelled = ex is OperationCanceledException;
                 result.ErrorMessage = result.OutcomeUnknown
                     ? "The accounting rollback outcome could not be confirmed. Reconcile the latest snapshot before retrying."
                     : "Accounting rollback did not complete. Refresh the backup status before retrying.";
@@ -499,8 +484,8 @@ WHERE donation.Id IS NULL
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error checking rollback availability");
-                info.ErrorMessage = $"Error checking backup availability: {ex.Message}";
+                _logger.LogError("Error checking rollback availability. ExceptionType={ExceptionType}", ex.GetType().Name);
+                info.ErrorMessage = "Unable to check backup availability. Please try again.";
             }
 
             return info;

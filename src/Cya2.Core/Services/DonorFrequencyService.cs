@@ -29,7 +29,7 @@ public sealed class GiftClassificationResult
 /// </summary>
 public class DonorFrequencyService
 {
-    // A donor is Monthly if missed months < 25% of the evaluation window.
+    // An established Monthly pattern allows up to 25% missed months.
     private const double MissedMonthTolerancePercent = 0.25;
 
     // Gifts are considered yearly if between 11 and 13 months apart.
@@ -46,50 +46,45 @@ public class DonorFrequencyService
     /// <summary>
     /// Determines the current frequency classification for a donor.
     /// Uses cache-first: only the history provided is evaluated.
-    /// Caller is responsible for supplying sufficient history:
-    ///   - Last 12 months minimum for Monthly detection.
-    ///   - 2+ years for Yearly detection if not Monthly.
-    /// Classification can move backward (re-evaluated fresh each call).
+    /// Caller supplies one donor/fund's complete history, or replay context with a proven pattern boundary.
+    /// A recent window alone cannot establish the preceding pattern state.
     /// </summary>
     public DonorFrequency ClassifyDonor(IReadOnlyList<DonorGiftRecord> history)
     {
         if (history == null || history.Count == 0)
             return DonorFrequency.None;
 
-        var sorted = history.OrderBy(g => g.Date).ToList();
-
-        if (sorted.Count == 1)
-            return DonorFrequency.OneTime;
-
-        if (IsMonthly(sorted))
-            return DonorFrequency.Monthly;
-
-        if (IsQuarterly(sorted))
-            return DonorFrequency.Quarterly;
-
-        if (IsYearly(sorted))
-            return DonorFrequency.Yearly;
-
-        return DonorFrequency.Sporadic;
+        var state = new FrequencySequence();
+        foreach (var gift in history.OrderBy(g => g.Date)) state.Add(gift);
+        return state.Current;
     }
 
     /// <summary>
     /// Classifies a single past gift in context of the donor's surrounding history.
     /// Designed to also be usable from a future DB-write pipeline (import/update).
-    /// historyAroundGift should include donations before AND after the gift date.
+    /// historyAroundGift includes this exact gift occurrence and surrounding donations.
+    /// Use the indexed overload when object identity is not available; never infer identity from date/amount.
     /// </summary>
     public GiftClassificationResult ClassifyGift(DonorGiftRecord gift, IReadOnlyList<DonorGiftRecord> historyAroundGift)
     {
         if (gift == null)
             return new GiftClassificationResult { Frequency = DonorFrequency.None };
 
-        var all = (historyAroundGift ?? Array.Empty<DonorGiftRecord>())
-            .Where(g => g.Date != gift.Date)
-            .Concat(new[] { gift })
-            .OrderBy(g => g.Date)
-            .ToList();
+        var history = historyAroundGift ?? Array.Empty<DonorGiftRecord>();
+        for (var index = 0; index < history.Count; index++)
+            if (ReferenceEquals(history[index], gift)) return ClassifyGift(index, history);
+        throw new ArgumentException("The gift must be an occurrence in history. Use the indexed overload to identify a gift explicitly.", nameof(gift));
+    }
 
-        var donorStatus = ClassifyDonor(all);
+    /// <summary>Identifies a specific occurrence without collapsing same-date or split gifts.</summary>
+    public GiftClassificationResult ClassifyGift(int giftIndex, IReadOnlyList<DonorGiftRecord> historyAroundGift)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(giftIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(giftIndex, historyAroundGift.Count);
+        var sorted = Enumerable.Range(0, historyAroundGift.Count).OrderBy(index => historyAroundGift[index].Date).ToArray();
+        var frequencies = ClassifySequence(sorted.Select(index => historyAroundGift[index]).ToArray());
+        var donorStatus = frequencies[Array.IndexOf(sorted, giftIndex)];
+        var gift = historyAroundGift[giftIndex];
 
         // Check catch-up only for monthly donors
         if (donorStatus == DonorFrequency.Monthly)
@@ -107,6 +102,62 @@ public class DonorFrequencyService
         }
 
         return new GiftClassificationResult { Frequency = donorStatus };
+    }
+
+    /// <summary>Classifies chronological gifts, revising only the preceding pattern boundary.</summary>
+    public DonorFrequency[] ClassifySequence(IReadOnlyList<DonorGiftRecord> sorted)
+    {
+        var result = new DonorFrequency[sorted.Count];
+        var state = new FrequencySequence();
+        for (var index = 0; index < sorted.Count; index++)
+        {
+            result[index] = state.Add(sorted[index]);
+            if (index > 0) result[index - 1] = state.Previous;
+        }
+        return result;
+    }
+
+    /// <summary>Bounded rolling context for one chronological donor/fund sequence.</summary>
+    public sealed class FrequencySequence
+    {
+        private readonly Queue<DonorGiftRecord> _window = new();
+        private readonly SortedDictionary<int, decimal> _months = [];
+        private DonorGiftRecord? _last;
+        public DonorFrequency Current { get; private set; } = DonorFrequency.None;
+        public DonorFrequency Previous { get; private set; } = DonorFrequency.None;
+
+        public DonorFrequency Add(DonorGiftRecord gift)
+        {
+            if (_last is not null && gift.Date < _last.Date)
+                throw new ArgumentException("Gifts must be chronological.", nameof(gift));
+            var start = gift.Date.AddMonths(-MonthlyLookbackMonths);
+            while (_window.TryPeek(out var expired) && expired.Date < start)
+            {
+                _window.Dequeue();
+                var key = MonthKey(expired.Date);
+                _months[key] -= expired.Amount;
+                if (!_window.TryPeek(out var next) || MonthKey(next.Date) != key) _months.Remove(key);
+            }
+            _window.Enqueue(gift);
+            var month = MonthKey(gift.Date);
+            _months[month] = _months.GetValueOrDefault(month) + gift.Amount;
+            Previous = Current;
+            if (_last is null) Current = DonorFrequency.OneTime;
+            else
+            {
+                var months = MonthsBetween(_last.Date, gift.Date);
+                Current = Current == DonorFrequency.Monthly && IsMonthly(_months)
+                    ? DonorFrequency.Monthly
+                    : months == 1 ? DonorFrequency.Monthly
+                    : months is >= QuarterlyMinMonths and <= QuarterlyMaxMonths ? DonorFrequency.Quarterly
+                    : months is >= YearlyMinMonths and <= YearlyMaxMonths ? DonorFrequency.Yearly
+                    : DonorFrequency.Sporadic;
+                if (Current != DonorFrequency.Sporadic || Previous == DonorFrequency.OneTime)
+                    Previous = Current;
+            }
+            _last = gift;
+            return Current;
+        }
     }
 
     /// <summary>
@@ -142,98 +193,40 @@ public class DonorFrequencyService
 
     // ── Private classification helpers ────────────────────────────────────────
 
-    private bool IsMonthly(List<DonorGiftRecord> sorted)
+    private static bool IsMonthly(SortedDictionary<int, decimal> months)
     {
-        var now = sorted.Last().Date;
-        var windowStart = now.AddMonths(-MonthlyLookbackMonths);
-
-        var giftsInWindow = sorted
-            .Where(g => g.Date >= windowStart)
-            .ToList();
-
-        if (giftsInWindow.Count == 0)
-            return false;
-
-        // Build the set of year-month keys that have at least one gift.
-        var giftMonths = giftsInWindow
-            .Select(g => new DateTime(g.Date.Year, g.Date.Month, 1))
-            .Distinct()
-            .OrderBy(d => d)
-            .ToList();
-
-        if (giftMonths.Count < 2)
-            return false;
-
-        // Evaluate months in the window from the first gift month to the last.
-        var firstGiftMonth = giftMonths.First();
-        var lastGiftMonth = giftMonths.Last();
-
-        var totalMonthsSpan = MonthsBetween(firstGiftMonth, lastGiftMonth) + 1;
-        if (totalMonthsSpan < 2)
-            return false;
-
-        // For each gap between consecutive gift months, check whether it is absorbed
-        // by a catch-up payment (large gift AFTER the gap) or a pre-payment (large gift
-        // BEFORE the gap). Credit whichever is larger; never exceed the actual gap size.
-        var totalAbsorbed = 0;
-        for (var i = 0; i < giftMonths.Count - 1; i++)
+        if (months.Count < 2) return false;
+        // At most thirteen calendar months intersect the date-relative twelve-month window.
+        Span<int> keys = stackalloc int[MonthlyLookbackMonths + 1];
+        Span<decimal> amounts = stackalloc decimal[MonthlyLookbackMonths + 1];
+        var count = 0;
+        decimal total = 0;
+        foreach (var (key, amount) in months)
         {
-            var monthA = giftMonths[i];
-            var monthB = giftMonths[i + 1];
-            var gapSize = MonthsBetween(monthA, monthB) - 1;
-            if (gapSize <= 0) continue;
-
-            var amountAtB = giftsInWindow.Where(g => g.Date.Year == monthB.Year && g.Date.Month == monthB.Month).Sum(g => g.Amount);
-            var priorToB = giftsInWindow.Where(g => !(g.Date.Year == monthB.Year && g.Date.Month == monthB.Month) && g.Date < monthB).ToList();
-            var catchUpAbsorbed = 0;
-            if (priorToB.Count > 0) { var avgPB = priorToB.Average(g => g.Amount); if (avgPB > 0) { var cu = (int)Math.Round((double)(amountAtB / avgPB)); catchUpAbsorbed = Math.Min(gapSize, Math.Max(0, cu - 1)); } }
-
-            var amountAtA = giftsInWindow.Where(g => g.Date.Year == monthA.Year && g.Date.Month == monthA.Month).Sum(g => g.Amount);
-            var afterA = giftsInWindow.Where(g => !(g.Date.Year == monthA.Year && g.Date.Month == monthA.Month) && g.Date > monthA).ToList();
-            var prePayAbsorbed = 0;
-            if (afterA.Count > 0) { var avgAA = afterA.Average(g => g.Amount); if (avgAA > 0) { var pp = (int)Math.Round((double)(amountAtA / avgAA)); prePayAbsorbed = Math.Min(gapSize, Math.Max(0, pp - 1)); } }
-
-            totalAbsorbed += Math.Min(gapSize, Math.Max(catchUpAbsorbed, prePayAbsorbed));
+            keys[count] = key;
+            amounts[count++] = amount;
+            total += amount;
         }
-
-        var effectiveMonthCount = giftMonths.Count + totalAbsorbed;
-        var missedMonths = Math.Max(0, totalMonthsSpan - effectiveMonthCount);
-        var missedRatio = (double)missedMonths / totalMonthsSpan;
-
-        return missedRatio <= MissedMonthTolerancePercent;
+        var absorbed = 0;
+        decimal priorTotal = 0;
+        for (var index = 0; index < count - 1; index++)
+        {
+            priorTotal += amounts[index];
+            var gap = keys[index + 1] - keys[index] - 1;
+            if (gap <= 0) continue;
+            var priorAverage = priorTotal / (index + 1);
+            var laterAverage = (total - priorTotal) / (count - index - 1);
+            absorbed += Math.Max(Coverage(amounts[index + 1], priorAverage, gap),
+                Coverage(amounts[index], laterAverage, gap));
+        }
+        var span = keys[count - 1] - keys[0] + 1;
+        return (double)Math.Max(0, span - count - absorbed) / span <= MissedMonthTolerancePercent;
     }
 
-    private static bool IsYearly(List<DonorGiftRecord> sorted)
-    {
-        if (sorted.Count < 2)
-            return false;
+    private static int Coverage(decimal amount, decimal average, int gap) => average <= 0 ? 0
+        : (int)Math.Clamp(Math.Round(amount / average) - 1, 0m, gap);
 
-        // All consecutive gap pairs must fall within the yearly window.
-        for (var i = 1; i < sorted.Count; i++)
-        {
-            var months = MonthsBetween(sorted[i - 1].Date, sorted[i].Date);
-            if (months < YearlyMinMonths || months > YearlyMaxMonths)
-                return false;
-        }
-
-        return true;
-    }
-
-    private static bool IsQuarterly(List<DonorGiftRecord> sorted)
-    {
-        if (sorted.Count < 2)
-            return false;
-
-        // All consecutive gap pairs must fall within the quarterly window.
-        for (var i = 1; i < sorted.Count; i++)
-        {
-            var months = MonthsBetween(sorted[i - 1].Date, sorted[i].Date);
-            if (months < QuarterlyMinMonths || months > QuarterlyMaxMonths)
-                return false;
-        }
-
-        return true;
-    }
+    private static int MonthKey(DateTime date) => date.Year * 12 + date.Month;
 
     private static int MonthsBetween(DateTime from, DateTime to)
     {

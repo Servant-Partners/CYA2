@@ -73,7 +73,7 @@
                                               Placeholder="@Localizer["SelectDefaultAccount"]"
                                               Disabled="@(userAccounts == null || userAccounts.Count == 0)"
                                               AllowFiltering="@isAdminOrViewer"
-                                              TextSelector="@(account => account.AccountId == 0 ? Localizer["None"].Value : InternAccountUtility.GetAccountSelectorDisplayName(account.Fund, account.InternName))"
+                                              TextSelector="@(account => account.AccountId == 0 ? Localizer["None"].Value : account.DisplayName)"
                                               Class="account-selector-dropdown-inline" />
                              }
                          </div>
@@ -181,7 +181,7 @@
             isAdminOrViewer = user.IsInRole("Admin") ||
                               string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(authLevel, "Viewer", StringComparison.OrdinalIgnoreCase);
-            isInternUser = string.Equals(authLevel, "Intern", StringComparison.OrdinalIgnoreCase);
+            isInternUser = false;
             var isAdminOnlyHint = user.IsInRole("Admin") || string.Equals(authLevel, "Admin", StringComparison.OrdinalIgnoreCase);
 
             var userIdentifier = SessionHydrationService.HydrateForUser(
@@ -245,9 +245,9 @@
                 errorMessage = "NoAccountsAccessibleContactAdmin";
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = $"{Localizer["ErrorLoadingUserData"]} {ex.Message}";
+            errorMessage = Localizer["ErrorLoadingUserData"];
         }
         finally
         {
@@ -387,7 +387,7 @@
             return Localizer["None"];
 
         var account = userAccounts.FirstOrDefault(a => a.AccountId == accountId.Value);
-        return InternAccountUtility.GetAccountSelectorDisplayName(account?.Fund);
+        return account?.DisplayName ?? string.Empty;
     }
 
     // Helper to centralize user id resolution for this component

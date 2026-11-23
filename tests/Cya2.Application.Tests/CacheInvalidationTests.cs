@@ -111,7 +111,7 @@ public sealed class CacheInvalidationTests
     }
 
     [Fact]
-    public async Task UserAccountContextService_UsesInternFundDesignationForInternIdentity()
+    public async Task UserAccountContextService_UsesInternSourceIdAndSeparateDisplayName()
     {
         var version = new CacheInvalidationVersion();
         var user = new User { Id = 904, Email = $"cache-test-{Guid.NewGuid():N}@example.test", AuthLevel = "User" };
@@ -119,6 +119,9 @@ public sealed class CacheInvalidationTests
         {
             AccountId = 45,
             Fund = "Intern: Jane Doe",
+            AccountKind = "Intern",
+            InternSourceId = "000904",
+            DisplayName = "Jane Doe",
             AccountNumber = "INT-904"
         };
         var service = new UserAccountContextService(
@@ -131,8 +134,23 @@ public sealed class CacheInvalidationTests
         var context = await service.GetContextAsync(user.Id.ToString());
 
         var selected = Assert.Single(context!.Accounts);
-        Assert.Equal("Jane Doe", selected.InternName);
+        Assert.Equal("000904", selected.InternName);
         Assert.Equal("Jane Doe", selected.DisplayName);
+    }
+
+    [Fact]
+    public async Task OrdinaryUserContext_UsesLinkedInternAccountWithoutInternRole()
+    {
+        var user = new User { Id = 905, Name = "Different Profile", AuthLevel = "User", DefaultAccount = 45 };
+        var account = new Account { AccountId = 45, Fund = "Intern: 000905", AccountKind = "Intern", InternSourceId = "000905", DisplayName = "Jane Doe" };
+        var service = new UserAccountContextService(new FakeUserRepository(user), new FakeUserAccountAccessRepository(account),
+            new FakeAccountRepository(account), new CacheInvalidationVersion(), NullLogger<UserAccountContextService>.Instance);
+
+        var context = await service.GetContextAsync(user.Id.ToString());
+
+        Assert.NotNull(context);
+        Assert.False(context.IsIntern);
+        Assert.Equal("000905", Assert.Single(context.Accounts).InternName);
     }
 
     [Fact]

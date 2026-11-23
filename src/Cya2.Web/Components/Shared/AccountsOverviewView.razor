@@ -1,4 +1,5 @@
 @using Cya2.Shared.Utilities
+@using Cya2.Core.Utilities
 @inject IStringLocalizer<Resource> Localizer
 @inject AccountsOverviewAccessService OverviewAccessService
 @inject AuthenticationStateProvider AuthStateProvider
@@ -43,7 +44,6 @@
     {
         <RadzenCard Class="accounts-overview-loading">
             <PageLoadingIndicator IsLoading="true" LoadingText="@loadingText" />
-            <div class="text-muted accounts-overview-loading-text">@loadingText</div>
         </RadzenCard>
     }
     else
@@ -56,8 +56,8 @@
                         AllowPaging="false"
                         EmptyText="@Localizer["NoBalancesFound"]">
             <Columns>
-                <RadzenDataGridColumn TItem="FundBalanceRow" Property="Fund" Title="@Localizer["Account"]">
-                    <Template Context="row">@DisplayFormatter.FormatFundDisplay(row.Fund)</Template>
+                <RadzenDataGridColumn TItem="FundBalanceRow" Property="DisplayName" Title="@Localizer["Account"]">
+                    <Template Context="row">@row.DisplayName</Template>
                 </RadzenDataGridColumn>
                 @if (!showDonations12m)
                 {
@@ -65,7 +65,11 @@
                 }
                 else
                 {
-                    <RadzenDataGridColumn TItem="FundBalanceRow" Property="Last12MonthsDonations" Title="@Localizer["TotalDonationsLTM"]" FormatString="{0:C2}" TextAlign="TextAlign.Right" />
+                    <RadzenDataGridColumn TItem="FundBalanceRow" Property="Last12MonthsDonations" Title="@Localizer["TotalDonationsLastTwelveMonths"]" FormatString="{0:C2}" TextAlign="TextAlign.Right">
+                        <HeaderTemplate>
+                            <span>@Localizer["TotalDonations"] (<span title="@Localizer["LastTwelveMonths"]">LTM</span>)</span>
+                        </HeaderTemplate>
+                    </RadzenDataGridColumn>
                 }
             </Columns>
         </RadzenDataGrid>
@@ -114,10 +118,6 @@
         align-items: center;
         justify-content: center;
         gap: 0.5rem;
-    }
-
-    .accounts-overview-loading-text {
-        text-align: center;
     }
 
     @@media (max-width: 768px) {
@@ -194,10 +194,11 @@
                 return;
             }
             fundBalances = overview
-                .OrderBy(a => a.Fund)
+                .OrderBy(a => a.DisplayName)
                 .Select(a => new FundBalanceRow
                 {
                     Fund = a.Fund,
+                    DisplayName = string.IsNullOrWhiteSpace(a.DisplayName) ? InternAccountUtility.GetAccountSelectorDisplayName(a.Fund) : a.DisplayName,
                     CurrentBalance = a.CurrentBalance,
                     Last12MonthsDonations = a.Last12MonthsDonations
                 })
@@ -205,9 +206,9 @@
             financialsLoaded = true;
             isLoading = false;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = $"Error loading accounts: {ex.Message}";
+            errorMessage = Localizer["SafeOperationError"];
             isLoading = false;
         }
 
@@ -224,19 +225,20 @@
             foreach (var row in fundBalances)
             {
                 var value = showDonations12m ? row.Last12MonthsDonations : row.CurrentBalance;
-                sb.AppendLine($"{DisplayFormatter.FormatFundDisplay(row.Fund)}\t{value}");
+                sb.AppendLine($"{row.DisplayName}\t{value}");
             }
             await JS.InvokeVoidAsync("navigator.clipboard.writeText", sb.ToString());
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            errorMessage = $"Error copying table: {ex.Message}";
+            errorMessage = Localizer["SafeOperationError"];
         }
     }
 
     private sealed class FundBalanceRow
     {
         public string Fund { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
         public decimal CurrentBalance { get; set; }
         public decimal Last12MonthsDonations { get; set; }
     }
