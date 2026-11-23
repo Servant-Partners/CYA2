@@ -2,9 +2,7 @@
 using System.Text;
 using MySql.Data.MySqlClient;
 
-const string historyTable = "Cya2SchemaMigrations";
 const string lockName = "cya2-schema-migrations";
-const string baselineId = "000001";
 const string baselineFileName = "001_InitialSchema.sql";
 
 try
@@ -66,52 +64,6 @@ catch (Exception ex)
     return 1;
 }
 
-static async Task<Dictionary<string, AppliedMigration>> LoadAppliedAsync(MySqlConnection connection)
-{
-    var result = new Dictionary<string, AppliedMigration>(StringComparer.OrdinalIgnoreCase);
-    await using var command = new MySqlCommand($"SELECT MigrationId, ScriptName, Checksum FROM `{historyTable}` ORDER BY MigrationId;", connection);
-    await using var reader = await command.ExecuteReaderAsync();
-    while (await reader.ReadAsync())
-    {
-        var id = reader.GetString(0);
-        if (!result.TryAdd(id, new AppliedMigration(id, reader.GetString(1), reader.GetString(2))))
-        {
-            throw new InvalidOperationException($"Migration history contains duplicate ID '{id}'.");
-        }
-    }
-
-    return result;
-}
-
-static void ValidateAppliedChecksums(Dictionary<string, AppliedMigration> applied, IReadOnlyList<MigrationFile> migrations, string baselinePath)
-{
-    var current = migrations.ToDictionary(m => m.Id, StringComparer.OrdinalIgnoreCase);
-    var baselineChecksum = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(baselinePath))).ToLowerInvariant();
-    foreach (var entry in applied.Values)
-    {
-        if (entry.Id.Equals(baselineId, StringComparison.OrdinalIgnoreCase))
-        {
-            if (!entry.ScriptName.Equals(baselineFileName, StringComparison.OrdinalIgnoreCase) ||
-                !entry.Checksum.Equals(baselineChecksum, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException($"Checksum mismatch for the applied baseline '{baselineFileName}'. Restore the original baseline or repair the migration history.");
-            }
-
-            continue;
-        }
-
-        if (!current.TryGetValue(entry.Id, out var migration))
-        {
-            throw new InvalidOperationException($"Applied migration '{entry.Id}' ({entry.ScriptName}) is missing from the migration directory.");
-        }
-
-        if (!string.Equals(entry.Checksum, migration.Checksum, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"Checksum mismatch for applied migration '{entry.Id}' ({entry.ScriptName}). Restore the original file or create a new migration.");
-        }
-    }
-}
-
 static async Task AcquireLockAsync(MySqlConnection connection)
 {
     await using var command = new MySqlCommand("SELECT GET_LOCK(@name, 30);", connection);
@@ -137,8 +89,6 @@ static async Task ExecuteAsync(MySqlConnection connection, string sql, MySqlTran
     command.Parameters.AddRange(parameters);
     await command.ExecuteNonQueryAsync();
 }
-
-sealed record AppliedMigration(string Id, string ScriptName, string Checksum);
 
 sealed class MigrationFile
 {

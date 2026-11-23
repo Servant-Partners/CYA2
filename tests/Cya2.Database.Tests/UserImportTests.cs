@@ -65,8 +65,9 @@ public sealed class UserImportTests
         var result = await service.ImportAsync();
         Assert.True(result.IsSuccess);
         Assert.Contains("existing users skipped: 1", result.Message);
-        Assert.Single(_store.Entries!);
-        Assert.Equal("other.person@scene8.net", _store.Entries[0].Email);
+        Assert.NotNull(_store.Entries);
+        var entry = Assert.Single(_store.Entries);
+        Assert.Equal("other.person@scene8.net", entry.Email);
 
         WriteWorkbook(("new.person@scene8.net", "normal"));
         Assert.True((await PreviewAsync(service)).CanImport);

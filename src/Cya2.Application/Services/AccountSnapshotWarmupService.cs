@@ -536,7 +536,7 @@ public sealed class AccountSnapshotWarmupService : IAccountSnapshotWarmupService
             AccountId = account.AccountId,
             Fund = account.Fund ?? string.Empty,
             InternName = account.AccountKind == "Intern" ? account.InternSourceId ?? string.Empty : string.Empty,
-            DisplayName = account.DisplayName ?? account.Fund,
+            DisplayName = account.DisplayName ?? account.Fund ?? string.Empty,
             AccountingClass = account.AccountingClass ?? string.Empty,
             AccountNumber = account.AccountNumber ?? string.Empty,
             CreatedAt = account.CreatedAt,

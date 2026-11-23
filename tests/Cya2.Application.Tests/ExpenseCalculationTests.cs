@@ -250,9 +250,9 @@ public sealed class ExpenseCalculationTests
     {
         public int CallCount { get; private set; }
 
-        public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string accountingClass, string accountNumber, DateTime startDate, DateTime endDate) => Task.FromResult(new List<AccountingRecord>());
+        public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string? accountingClass, string accountNumber, DateTime startDate, DateTime endDate) => Task.FromResult(new List<AccountingRecord>());
 
-        public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string AccountingClass, string AccountNumber)> accounts, DateTime startDate, DateTime endDate)
+        public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string? AccountingClass, string AccountNumber)> accounts, DateTime startDate, DateTime endDate)
         {
             CallCount++;
             return Task.FromResult<IReadOnlyDictionary<int, List<AccountingRecord>>>(new Dictionary<int, List<AccountingRecord>>
@@ -411,16 +411,16 @@ public sealed class ExpenseCalculationTests
         public int SingleCallCount { get; private set; }
         public int BatchCallCount { get; private set; }
 
-        public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string accountingClass, string accountNumber, DateTime startDate, DateTime endDate)
+        public Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(string? accountingClass, string accountNumber, DateTime startDate, DateTime endDate)
         {
             SingleCallCount++;
             return Task.FromResult(new List<AccountingRecord>
             {
-                new() { AccountingClass = accountingClass, AccountNumber = accountNumber, Account = "Income", Amount = 7 }
+                new() { AccountingClass = accountingClass ?? string.Empty, AccountNumber = accountNumber, Account = "Income", Amount = 7 }
             });
         }
 
-        public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string AccountingClass, string AccountNumber)> accounts, DateTime startDate, DateTime endDate)
+        public Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(IReadOnlyList<(int AccountId, string? AccountingClass, string AccountNumber)> accounts, DateTime startDate, DateTime endDate)
         {
             BatchCallCount++;
             return Task.FromResult<IReadOnlyDictionary<int, List<AccountingRecord>>>(new Dictionary<int, List<AccountingRecord>>());
@@ -476,12 +476,12 @@ public sealed class ExpenseCalculationTests
             {
                 1 => new List<AccountingRecord>
                 {
-                    new() { AccountingClass = account.AccountingClass, AccountNumber = account.AccountNumber, Account = "Payroll Clearing Insurance", Amount = 100 },
-                    new() { AccountingClass = account.AccountingClass, AccountNumber = account.AccountNumber, Account = "Income", Amount = 10 }
+                    new() { AccountingClass = account.AccountingClass ?? string.Empty, AccountNumber = account.AccountNumber, Account = "Payroll Clearing Insurance", Amount = 100 },
+                    new() { AccountingClass = account.AccountingClass ?? string.Empty, AccountNumber = account.AccountNumber, Account = "Income", Amount = 10 }
                 },
                 2 => new List<AccountingRecord>
                 {
-                    new() { AccountingClass = account.AccountingClass, AccountNumber = account.AccountNumber, Account = "Transfer: operating", Amount = 20 }
+                    new() { AccountingClass = account.AccountingClass ?? string.Empty, AccountNumber = account.AccountNumber, Account = "Transfer: operating", Amount = 20 }
                 },
                 _ => []
             });

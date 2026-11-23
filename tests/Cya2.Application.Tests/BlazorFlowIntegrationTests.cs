@@ -68,6 +68,24 @@ public sealed class BlazorFlowIntegrationTests
     }
 
     [Fact]
+    public void AccountingCaches_NormalizeMissingClassButKeepAccountIdentity()
+    {
+        var date = new DateTime(2026, 1, 1);
+        var cache = new AccountBalanceCache();
+        cache.Set(42, null, "NUMBER", 0m, 3, date, "test-user", 123m);
+
+        Assert.True(cache.TryGet(42, "", "NUMBER", 0m, 3, date, "test-user", out var balance));
+        Assert.Equal(123m, balance);
+        Assert.False(cache.TryGet(43, "", "NUMBER", 0m, 3, date, "test-user", out _));
+        Assert.Equal(
+            new Cya2.Application.Models.AccountingDataCacheKey(42, null, "NUMBER", 3, date, date).Normalize(),
+            new Cya2.Application.Models.AccountingDataCacheKey(42, "", "NUMBER", 3, date, date).Normalize());
+        Assert.Equal(
+            new Cya2.Application.Models.UserAccountingDataCacheKey("test-user", 42, null, "NUMBER", 3).Normalize(),
+            new Cya2.Application.Models.UserAccountingDataCacheKey("test-user", 42, "", "NUMBER", 3).Normalize());
+    }
+
+    [Fact]
     public void AccountBalanceCache_RemovesOnlyStaleGenerations()
     {
         var cache = new AccountBalanceCache();

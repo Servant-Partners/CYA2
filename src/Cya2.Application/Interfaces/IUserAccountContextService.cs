@@ -23,7 +23,7 @@ public sealed class UserAccountContextAccount
 {
     public int AccountId { get; set; }
     public string Fund { get; set; } = string.Empty;
-    public string AccountingClass { get; set; } = string.Empty;
+    public string? AccountingClass { get; set; } = string.Empty;
     public string AccountNumber { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public decimal Overhead { get; set; }

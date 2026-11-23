@@ -24,7 +24,7 @@ public sealed class AccountBalanceCache : IAccountBalanceCache
 
     public bool TryGet(
         int accountId,
-        string accountingClass,
+        string? accountingClass,
         string accountNumber,
         decimal balanceAdjustment,
         long generation,
@@ -48,7 +48,7 @@ public sealed class AccountBalanceCache : IAccountBalanceCache
 
     public void Set(
         int accountId,
-        string accountingClass,
+        string? accountingClass,
         string accountNumber,
         decimal balanceAdjustment,
         long generation,
@@ -139,7 +139,7 @@ public sealed class AccountBalanceCache : IAccountBalanceCache
 
     private static BalanceKey NormalizeKey(
         int accountId,
-        string accountingClass,
+        string? accountingClass,
         string accountNumber,
         decimal balanceAdjustment,
         long generation,

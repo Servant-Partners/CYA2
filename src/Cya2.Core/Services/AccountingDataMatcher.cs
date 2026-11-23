@@ -6,7 +6,7 @@ public static class AccountingDataMatcher
 {
     public static bool MatchesAccount(
         AccountingRecord row,
-        string accountingClass,
+        string? accountingClass,
         string accountNumber)
     {
         var classMatches = string.Equals(row.AccountingClass, accountingClass, StringComparison.OrdinalIgnoreCase);

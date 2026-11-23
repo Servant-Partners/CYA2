@@ -87,7 +87,7 @@ public sealed class AdminPreloadService : IAdminPreloadService
                     : [];
                 result.Add(new AdminAccountOverviewDto
                 {
-                    Fund = account.Fund,
+                    Fund = account.Fund ?? string.Empty,
                     DisplayName = InternAccountUtility.GetAccountSelectorDisplayName(account),
                     CurrentBalance = 0m,
                     Last12MonthsDonations = internDonations

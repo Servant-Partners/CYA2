@@ -62,7 +62,7 @@ public class DonationPreviewValidationBenchmarks
 
     private sealed class SyntheticAuthorization : IImportAuthorizationContext
     {
-        public Task<ImportActor?> GetCurrentActorAsync() => Task.FromResult<ImportActor?>(new ImportActor("synthetic", true));
+        public Task<ImportActor> GetCurrentActorAsync() => Task.FromResult(new ImportActor("synthetic", true));
     }
 
     private sealed class PreviewOnlyProcessor(string importType) : IImportProcessor

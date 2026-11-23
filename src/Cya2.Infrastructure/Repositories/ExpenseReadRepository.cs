@@ -27,7 +27,7 @@ public sealed class ExpenseReadRepository : IExpenseReadRepository
     private string ConnStr => _configuration.GetConnectionString("default") ?? string.Empty;
 
     public async Task<List<AccountingRecord>> GetAccountingDataForAccountAsync(
-        string accountingClass,
+        string? accountingClass,
         string accountNumber,
         DateTime startDate,
         DateTime endDate)
@@ -46,7 +46,7 @@ ORDER BY Date";
     }
 
     public async Task<IReadOnlyDictionary<int, List<AccountingRecord>>> GetAccountingDataForAccountsAsync(
-        IReadOnlyList<(int AccountId, string AccountingClass, string AccountNumber)> accounts,
+        IReadOnlyList<(int AccountId, string? AccountingClass, string AccountNumber)> accounts,
         DateTime startDate,
         DateTime endDate)
     {
@@ -120,7 +120,7 @@ ORDER BY Date";
             var result = accounts.ToDictionary(account => account.AccountId, _ => new List<AccountingRecord>());
             var accountIdsByClass = accounts
             .Where(account => !string.IsNullOrWhiteSpace(account.AccountingClass))
-            .GroupBy(account => account.AccountingClass, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(account => account.AccountingClass ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => group.Select(account => account.AccountId).ToArray(),

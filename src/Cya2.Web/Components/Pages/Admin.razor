@@ -981,7 +981,7 @@
         private byte[]? userImportWorkbook;
         private string? userImportFileName;
         private string userImportMessage = string.Empty;
-        private bool userImportBusy;
+        private bool userImportBusy { get; set; }
         private bool userImportSuccess;
         private const long MaxBulkImportFileSize = 10 * 1024 * 1024;
 

@@ -8,7 +8,7 @@ public sealed class FundReferenceDto
     public string? InternDisplayName { get; init; }
     public string DisplayName => InternDisplayName ?? (string.IsNullOrWhiteSpace(InternName) ? Fund : InternName);
     public DateTime CreatedAt { get; init; }
-    public string AccountingClass { get; init; } = string.Empty;
+    public string? AccountingClass { get; init; } = string.Empty;
     public string AccountNumber { get; init; } = string.Empty;
     public decimal Overhead { get; init; }
     public string SoftCredit { get; init; } = string.Empty;
