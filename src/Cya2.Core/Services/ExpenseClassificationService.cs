@@ -51,6 +51,7 @@ public class ExpenseClassificationService
 
         return string.Equals(transaction.Type, "Payroll Check", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(transaction.Type, "Expense", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(transaction.Account, "Reimbursements:Counseling Reimburse", StringComparison.OrdinalIgnoreCase) ||
                (transaction.Account != null &&
                    (transaction.Account.Contains("Expenses:", StringComparison.OrdinalIgnoreCase) ||
                     transaction.Account.Contains("Payroll:", StringComparison.OrdinalIgnoreCase) ||
