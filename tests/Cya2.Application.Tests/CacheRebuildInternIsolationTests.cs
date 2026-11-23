@@ -73,7 +73,7 @@ public sealed class CacheRebuildInternIsolationTests
         Assert.Equal(new[] { "Jane Doe", "John Doe" }, donations.InternNames.Order(StringComparer.Ordinal));
         Assert.Equal(DateTime.MinValue, accounting.StartDate);
         Assert.True(donations.InternStart <= DateTime.UtcNow.Date.AddMonths(-12));
-        Assert.Equal(new DateTime(DateTime.Now.Year, 12, 31), donations.InternEnd);
+        Assert.Equal(Cya2.Core.ValueObjects.DateRange.EndOfDay(new DateTime(DateTime.Now.Year, 12, 31)), donations.InternEnd);
         Assert.Equal(3, preload.Data!.Accounts.Count);
         if (warmSummaries)
         {

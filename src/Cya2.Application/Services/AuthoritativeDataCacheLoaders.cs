@@ -44,12 +44,12 @@ public sealed class DonationDataCacheLoader : IDonationDataCacheLoader
             ? await _donationReadRepository.GetInternDonationsByInternNameAndDateRangeAsync(
                 account.InternName,
                 queryRange.StartDate,
-                queryRange.EndDate)
+                DateRange.EndOfDay(queryRange.EndDate))
             : await _donationReadRepository.GetDonationsForAccountScopeAsync(
                 account.AccountId,
                 account.Fund,
                 queryRange.StartDate,
-                queryRange.EndDate);
+                DateRange.EndOfDay(queryRange.EndDate));
 
         var records = (donations ?? [])
             .Select(d => new DonationCacheRecord(
@@ -95,7 +95,7 @@ public sealed class AccountingDataCacheLoader : IAccountingDataCacheLoader
             account.AccountingClass,
             account.AccountNumber,
             queryRange.StartDate,
-            queryRange.EndDate);
+            DateRange.EndOfDay(queryRange.EndDate));
 
         var records = (accounting ?? [])
             .Select(a => new AccountingCacheRecord(

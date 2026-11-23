@@ -86,6 +86,29 @@ public sealed class HomeSummaryCacheTests
         Assert.DoesNotContain(facts.AccountingRanges, range => range.StartDate == DateTime.MinValue);
     }
 
+    [Fact]
+    public async Task Visualization_ExpensesRespectPartialFirstAndLastMonths()
+    {
+        var start = new DateTime(DateTime.Today.Year - 1, 3, 15);
+        var end = new DateTime(start.Year, 4, 10);
+        var account = new UserAccountContextAccount { AccountId = 1, Fund = "General", AccountingClass = "Class", AccountNumber = "100" };
+        var rows = new List<AccountingRecord>
+        {
+            new() { Id = 1, AccountingClass = "Class", Date = start.AddDays(-1), Type = "Expense", Amount = 100 },
+            new() { Id = 2, AccountingClass = "Class", Date = start, Type = "Expense", Amount = 10 },
+            new() { Id = 3, AccountingClass = "Class", Date = end, Type = "Expense", Amount = 20 },
+            new() { Id = 4, AccountingClass = "Class", Date = end.AddDays(1), Type = "Expense", Amount = 100 }
+        };
+        var service = CreateStandardDashboard(account, new AccountingLoader(rows), new CacheInvalidationVersion(), new Facts(rows));
+
+        var points = await service.GetMonthlyVisualizationAsync(account.Fund, start, end, "1");
+
+        Assert.Equal(2, points.Count);
+        Assert.Equal(new DateTime(start.Year, 3, 1), points[0].MonthStart);
+        Assert.Equal(10m, points[0].ExpenseTotal);
+        Assert.Equal(20m, points[1].ExpenseTotal);
+    }
+
     private static List<AccountingRecord> CreateAccountingHistory(DateTime now, double historicalAmount) =>
     [
         new() { Id = 1, AccountingClass = "Class", Date = new DateTime(now.Year - 3, 6, 1), Amount = historicalAmount, Account = "Income" },

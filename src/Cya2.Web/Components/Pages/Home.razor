@@ -1366,17 +1366,14 @@ private bool showMissingGiftDialog = false;
             visualizationPresetOptions = DateRangeHelper.GetPresetOptions(Localizer)
                 .Select(p => new DatePresetOption { Value = p.preset, Text = p.displayName })
                 .ToList();
+            visualizationPresetOptions.Insert(0, new DatePresetOption { Value = DateRangeHelper.DateRangePreset.LastMonth, Text = Localizer["LastMonth"] });
+            visualizationPresetOptions.Insert(0, new DatePresetOption { Value = DateRangeHelper.DateRangePreset.ThisMonth, Text = Localizer["ThisMonth"] });
 
             visualizationGraphTypeOptions[0].Text = Localizer["LineChart"];
             visualizationGraphTypeOptions[1].Text = Localizer["AreaChart"];
             visualizationGraphTypeOptions[2].Text = Localizer["ColumnChart"];
 
-            var (vizStart, vizEnd) = DateRangeHelper.GetPresetDateRange(visualizationSelectedPreset);
-            visualizationPendingStartDate = vizStart.Date;
-            visualizationPendingEndDate = vizEnd.Date;
-            visualizationStartDate = visualizationPendingStartDate;
-            visualizationEndDate = visualizationPendingEndDate;
-            InitializeCustomDateRange();
+            InitializeSharedDateRange();
 
             var requestedFund = !string.IsNullOrWhiteSpace(SessionUserStateService.SelectedAccountFund)
                 ? SessionUserStateService.SelectedAccountFund
@@ -1408,7 +1405,7 @@ private bool showMissingGiftDialog = false;
             SessionUserStateService.SelectedAccountFund = selectedAccount;
             SessionUserStateService.DefaultAccountFund = defaultFundFromDto;
             RefreshSelectedAccountMode();
-            SetAccountSummaryFromCurrentMonth();
+            await LoadCustomSummaryAsync();
             // Logger.LogInformation("Home init phase=state-prepared elapsedMs={ElapsedMs} selectedAccount={SelectedAccount}", initSw.ElapsedMilliseconds, selectedAccount);
 
             if (!string.IsNullOrWhiteSpace(cachedUserId) && !string.IsNullOrWhiteSpace(selectedAccount))
@@ -1447,25 +1444,30 @@ private bool showMissingGiftDialog = false;
         }
     }
 
-    private void SetAccountSummaryFromCurrentMonth()
+    private void InitializeSharedDateRange()
     {
-        var today = DateTime.Today;
-        customSummary = dashboardData.CurrentMonth;
-        customStartDate = new DateTime(today.Year, today.Month, 1);
-        customEndDate = customStartDate.AddMonths(1).AddDays(-1);
-        customPendingStartDate = customStartDate;
-        customPendingEndDate = customEndDate;
+        var state = DateRangeStateService.InitializeDateRange(SessionUserStateService);
+        SetDisplayedDateRange(state.StartDate, state.EndDate, state.SelectedPreset);
         hasAppliedCustomDateRange = true;
-        isCustomSummaryLoading = false;
     }
 
-    private void InitializeCustomDateRange()
+    private void SetDisplayedDateRange(DateTime start, DateTime end, Cya2.Application.DTOs.DateRangePreset preset)
     {
-        var today = DateTime.Today;
-        customPendingStartDate = new DateTime(today.Year, today.Month, 1);
-        customPendingEndDate = customPendingStartDate.AddMonths(1).AddDays(-1);
-        customStartDate = customPendingStartDate;
-        customEndDate = customPendingEndDate;
+        customStartDate = customPendingStartDate = visualizationStartDate = visualizationPendingStartDate = start.Date;
+        customEndDate = customPendingEndDate = visualizationEndDate = visualizationPendingEndDate = end.Date;
+        visualizationSelectedPreset = Enum.TryParse<DateRangeHelper.DateRangePreset>(preset.ToString(), out var parsed)
+            ? parsed
+            : DateRangeHelper.DateRangePreset.Custom;
+    }
+
+    private void SaveSharedDateRange(DateTime start, DateTime end, Cya2.Application.DTOs.DateRangePreset preset)
+    {
+        var state = new DateRangeStateDto { StartDate = start.Date, EndDate = end.Date, SelectedPreset = preset };
+        DateRangeStateService.SaveDateRangeToSessionState(SessionUserStateService, state);
+        if (!string.IsNullOrWhiteSpace(cachedUserId))
+            DateRangeSelectionService.SetDateRange(cachedUserId, state.StartDate, state.EndDate, preset.ToString());
+        SetDisplayedDateRange(state.StartDate, state.EndDate, preset);
+        hasAppliedCustomDateRange = true;
     }
 
     private async Task LoadCustomSummaryAsync()
@@ -1517,9 +1519,8 @@ private bool showMissingGiftDialog = false;
             return;
         }
 
-        customStartDate = customPendingStartDate.Date;
-        customEndDate = customPendingEndDate.Date;
-        hasAppliedCustomDateRange = true;
+        var preset = DateRangeStateService.DeterminePresetFromDates(customPendingStartDate, customPendingEndDate);
+        SaveSharedDateRange(customPendingStartDate, customPendingEndDate, preset);
         await LoadCustomSummaryAsync();
     }
 
@@ -1612,6 +1613,8 @@ private bool showMissingGiftDialog = false;
 
             Logger.LogInformation("Home account selection started");
             requestVersion = Interlocked.Increment(ref accountRequestVersion);
+            Interlocked.Increment(ref customSummaryRequestVersion);
+            Interlocked.Increment(ref visualizationRequestVersion);
             isAccountDataLoading = true;
             StateHasChanged();
 
@@ -1652,7 +1655,9 @@ private bool showMissingGiftDialog = false;
 
             selectedAccount = ResolveSelectedAccount(dashboardData);
             SessionUserStateService.SelectedAccountFund = selectedAccount;
-            SetAccountSummaryFromCurrentMonth();
+            await LoadCustomSummaryAsync();
+            if (showVisualizations)
+                await LoadVisualizationDataAsync();
             var selectedAccountDto = dashboardData.UserAccounts.FirstOrDefault(account =>
                 string.Equals(account.SelectionKey, selectedAccount, StringComparison.OrdinalIgnoreCase));
             if (selectedAccountDto is not null)
@@ -1729,9 +1734,12 @@ private bool showMissingGiftDialog = false;
 
     private async Task ApplyVisualizationRange()
     {
-        visualizationStartDate = visualizationPendingStartDate.Date;
-        visualizationEndDate = visualizationPendingEndDate.Date;
-        visualizationSelectedPreset = DateRangeHelper.DetectPreset(visualizationStartDate, visualizationEndDate);
+        if (visualizationPendingEndDate.Date < visualizationPendingStartDate.Date)
+            return;
+
+        var preset = DateRangeStateService.DeterminePresetFromDates(visualizationPendingStartDate, visualizationPendingEndDate);
+        SaveSharedDateRange(visualizationPendingStartDate, visualizationPendingEndDate, preset);
+        await LoadCustomSummaryAsync();
         await LoadVisualizationDataAsync();
     }
 

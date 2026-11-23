@@ -40,7 +40,7 @@ public sealed class AccountFactDataService : IAccountFactDataService
         if (!string.IsNullOrWhiteSpace(account.InternName))
         {
             // A fund can include more than one intern, so intern facts are loaded by the donation's InternName rather than Fund.
-            var internRows = await _donationRepository.GetInternDonationsByInternNameAndDateRangeAsync(account.InternName ?? string.Empty, startDate, endDate);
+            var internRows = await _donationRepository.GetInternDonationsByInternNameAndDateRangeAsync(account.InternName ?? string.Empty, startDate.Date, DateRange.EndOfDay(endDate));
             return new DonationCalculationData { Donations = internRows ?? [], SubAccounts = [] };
         }
 
@@ -98,7 +98,7 @@ public sealed class AccountFactDataService : IAccountFactDataService
             var subs = _accountMetadataCache.TryGet(account.AccountId, metadataGeneration, out var metadata)
                 ? metadata.SubAccounts
                 : await _donationRepository.GetSubAccountsByAccountIdAsync(account.AccountId);
-            var rows = await _donationRepository.GetDonationsForAccountScopeAsync(account.AccountId, account.Fund, range.StartDate, range.EndDate);
+            var rows = await _donationRepository.GetDonationsForAccountScopeAsync(account.AccountId, account.Fund, range.StartDate, DateRange.EndOfDay(range.EndDate));
             return new UserDonationDataCacheEntry(key, [new UserFactCoverage(range.StartDate, range.EndDate)], (rows ?? []).Select(ToDonationCacheRecord), (subs ?? []).Select(s => new SubAccountCacheRecord(s.Id, s.AccountId, s.SubFund, s.Kind)), DateTime.UtcNow);
         }, cancellationToken);
     }
@@ -109,7 +109,7 @@ public sealed class AccountFactDataService : IAccountFactDataService
         var key = new UserAccountingDataCacheKey(userId, account.AccountId, account.AccountingClass, account.AccountNumber, _versions.Accounting).Normalize();
         return await _userAccounting.AddCoverageAsync(key, range.StartDate, range.EndDate, async token =>
         {
-            var rows = await _expenseRepository.GetAccountingDataForAccountAsync(account.AccountingClass, account.AccountNumber, range.StartDate, range.EndDate);
+            var rows = await _expenseRepository.GetAccountingDataForAccountAsync(account.AccountingClass, account.AccountNumber, range.StartDate, DateRange.EndOfDay(range.EndDate));
             return new UserAccountingDataCacheEntry(key, [new UserFactCoverage(range.StartDate, range.EndDate)], (rows ?? []).Select(ToAccountingCacheRecord), DateTime.UtcNow);
         }, cancellationToken);
     }

@@ -6,6 +6,10 @@ public record DateRange(DateTime StartDate, DateTime EndDate)
 
     public bool Contains(DateTime date) => date >= StartDate && date <= EndDate;
 
+    public static DateTime EndOfDay(DateTime date) => date.Date == DateTime.MaxValue.Date
+        ? DateTime.MaxValue
+        : date.Date.AddDays(1).AddTicks(-1);
+
     public int DurationInDays => (EndDate - StartDate).Days + 1;
 
     public bool IsValid() => EndDate >= StartDate;
