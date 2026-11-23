@@ -63,12 +63,12 @@ public sealed class CacheRebuildService : ICacheRebuildService
                 .ToList()))
             .Where(account => !string.IsNullOrWhiteSpace(account.Fund))
             .ToList();
-        var donationTask = _donationReadRepository.GetDonationsForAccountsAsync(normalAccounts, rebuildStart, rebuildEnd);
-        var internDonationTask = _donationReadRepository.GetInternDonationsByNamesAndDateRangeAsync(internNames, rebuildStart, internEnd);
+        var donationTask = _donationReadRepository.GetDonationsForAccountsAsync(normalAccounts, rebuildStart, Cya2.Core.ValueObjects.DateRange.EndOfDay(rebuildEnd));
+        var internDonationTask = _donationReadRepository.GetInternDonationsByNamesAndDateRangeAsync(internNames, rebuildStart, Cya2.Core.ValueObjects.DateRange.EndOfDay(internEnd));
         var accountingTask = _expenseReadRepository.GetAccountingDataForAccountsAsync(
             standardAccounts.Select(account => (account.AccountId, account.AccountingClass, account.AccountNumber)).ToList(),
             DateTime.MinValue,
-            rebuildEnd);
+            Cya2.Core.ValueObjects.DateRange.EndOfDay(rebuildEnd));
         _logger.LogInformation(
             "Central cache rebuild financial loads started: normalDonationTask={NormalDonationTask}, internDonationTask={InternDonationTask}, accountingTask={AccountingTask}",
             !donationTask.IsCompleted,

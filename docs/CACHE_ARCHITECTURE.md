@@ -135,6 +135,8 @@ The following matrix records the current implementation contract. A cache's regi
 | Import preview | Temporary uploaded preview and ownership metadata | Process-wide singleton | Never shareable across users | Preview ID, authenticated owner, import type | Maximum 15-minute retention with bounded preview capacity | Expiration/capacity cleanup | Removal after import, failure, abandonment, or expiration | Owner and current administrator authorization are required |
 | Import progress | Temporary import status and progress | Process-wide host service | Never shareable across users | Progress ID, authenticated owner | Maximum 15-minute retention for terminal/abandoned records | Expiration/cleanup | Completion, failure, abandonment, or expiration | Owner and current administrator authorization are required |
 
+Home (including the Admin Account Summaries dialog), Donations, Donors and Expenses restore the applied per-user range from session state, with the per-user selection cache used to hydrate a new session. Applied Home custom/visualization ranges and Donors All Dates are also saved to both stores. Home's fixed month/year cards remain independent; its selected-range summary and visualization reload for the selected account. All Dates keeps the Donors page's unfiltered donor query. Fact-cache keys and authorization checks are unchanged; shared, overflow and rebuild fact queries use inclusive calendar end dates, including records with a time on the end date.
+
 ### Current cache gaps and follow-up requirements
 
 The matrix documents current behavior; it does not imply that every cache already meets the target architecture. The following remain implementation follow-up items:

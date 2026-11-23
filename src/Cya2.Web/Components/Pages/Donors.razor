@@ -527,9 +527,9 @@
 
     private async Task BuildDonorsInRange(AccountOptionDto? account)
     {
-        donorsInRange = new List<DonorSummaryDto>();
         if (account is not { } currentAccount)
         {
+            donorsInRange = new List<DonorSummaryDto>();
             return;
         }
 
@@ -543,6 +543,7 @@
             return;
         }
 
+        donorsInRange = new List<DonorSummaryDto>();
         try
         {
             Logger.LogInformation("[Donors] BuildDonorsInRange start user={UserId} accountId={AccountId} preset={Preset} range={Start:yyyy-MM-dd}..{End:yyyy-MM-dd} showSubAccountDropdown={ShowSubAccountDropdown}",
@@ -780,16 +781,6 @@
     private async Task selectDateRange()
     {
         isLoading = true;
-        if (dateRangeState.SelectedPreset == Cya2.Application.DTOs.DateRangePreset.AllDates)
-        {
-            // All Donors uses a no-date-filter DB query — don't touch shared date range state.
-            if (currentAccount != null)
-                await BuildDonorsInRange(currentAccount);
-            isLoading = false;
-            await InvokeAsync(StateHasChanged);
-            return;
-        }
-
         try
         {
             DateRangeStateService.ApplyPendingDates(dateRangeState);

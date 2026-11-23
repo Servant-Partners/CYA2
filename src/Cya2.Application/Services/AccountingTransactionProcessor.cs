@@ -37,8 +37,8 @@ public sealed class AccountingTransactionProcessor : IAccountingTransactionProce
     {
         var entries = (candidates ?? [])
             .Where(entry =>
-                (!startDate.HasValue || entry.Date >= startDate.Value) &&
-                (!endDate.HasValue || entry.Date <= endDate.Value))
+                (!startDate.HasValue || entry.Date.Date >= startDate.Value.Date) &&
+                (!endDate.HasValue || entry.Date.Date <= endDate.Value.Date))
             .Where(entry => !_classificationService.IsExcludedFromBalance(entry))
             .ToList();
 

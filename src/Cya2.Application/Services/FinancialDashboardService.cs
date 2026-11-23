@@ -560,7 +560,8 @@ public class FinancialDashboardService : IFinancialDashboardService
                     donationData.SubAccounts,
                     monthStart,
                     monthEnd).TotalDonations;
-                var expenseTask = _accountCalculationService.CalculateBalanceAsync(selectedAccount, userId, monthStart, monthEnd);
+                var expenseStart = monthStart < startDate.Date ? startDate.Date : monthStart;
+                var expenseTask = _accountCalculationService.CalculateBalanceAsync(selectedAccount, userId, expenseStart, monthEnd);
                 var balanceTask = CalculateCachedHomeBalanceAsync(selectedAccount, monthEnd, userId);
 
                 await Task.WhenAll(expenseTask, balanceTask);

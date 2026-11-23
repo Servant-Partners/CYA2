@@ -9,9 +9,8 @@ public class DonationPresentationService : IDonationPresentationService
     {
         if (data == null) return new List<DonationRowDto>();
         if (start == null && end == null) return data;
-        if (start != null && end == null) return data.Where(d => d.Date >= start).ToList();
-        if (start == null && end != null) return data.Where(d => d.Date <= end).ToList();
-        return data.Where(d => d.Date >= start && d.Date <= end).ToList();
+        return data.Where(d => (!start.HasValue || d.Date.Date >= start.Value.Date) &&
+                               (!end.HasValue || d.Date.Date <= end.Value.Date)).ToList();
     }
 
     public DonationPivotResultDto BuildPivot(List<DonationRowDto> selectedDonations, DateTime startDate, DateTime endDate, string unknownDonorLabel)

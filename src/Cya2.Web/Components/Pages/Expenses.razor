@@ -382,7 +382,8 @@
             new() { Text = Localizer["ThisYear"],         Value = Cya2.Application.DTOs.DateRangePreset.ThisYear },
             new() { Text = Localizer["LastYear"],         Value = Cya2.Application.DTOs.DateRangePreset.LastYear },
             new() { Text = Localizer["Previous12Months"], Value = Cya2.Application.DTOs.DateRangePreset.Previous12Months },
-            new() { Text = Localizer["CustomRange"],      Value = Cya2.Application.DTOs.DateRangePreset.Custom }
+            new() { Text = Localizer["CustomRange"],      Value = Cya2.Application.DTOs.DateRangePreset.Custom },
+            new() { Text = Localizer["AllDates"],         Value = Cya2.Application.DTOs.DateRangePreset.AllDates }
         };
     }
 
@@ -391,7 +392,8 @@
         if (args is Cya2.Application.DTOs.DateRangePreset preset)
         {
             DateRangeStateService.ApplyPreset(dateRangeState, preset);
-            _ = ApplyDateFilter();
+            if (preset != Cya2.Application.DTOs.DateRangePreset.Custom)
+                _ = ApplyDateFilter();
         }
     }
 
