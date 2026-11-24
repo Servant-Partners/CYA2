@@ -85,7 +85,7 @@ public class ExpenseClassificationService
     /// </summary>
     public bool IsExcludedFromBalance(AccountingRecord transaction)
     {
-        return string.Equals(transaction?.Type, "Payroll Adjustment", StringComparison.OrdinalIgnoreCase) ||
+        return string.Equals(transaction?.Account, "Payroll Tax Payable", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(transaction?.Account, "Prepaids", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(transaction?.Account, "Payroll Clearing Insurance", StringComparison.OrdinalIgnoreCase);
     }

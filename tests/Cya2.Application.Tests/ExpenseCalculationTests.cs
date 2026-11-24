@@ -131,7 +131,7 @@ public sealed class ExpenseCalculationTests
     }
 
     [Fact]
-    public void PayrollAdjustments_AreExcludedFromForwardAndReverseBalanceCalculations()
+    public void PayrollTaxPayable_IsExcludedFromForwardAndReverseBalanceCalculations()
     {
         var classification = new ExpenseClassificationService();
         var processor = new AccountingTransactionProcessor(classification);
@@ -142,21 +142,23 @@ public sealed class ExpenseCalculationTests
             new() { AccountingClass = "Fund Class", Type = "Payroll Adjustment", Account = "Payroll: Wages", Amount = 50, Date = new DateTime(2025, 1, 2) },
             new() { AccountingClass = "Fund Class", Type = "payroll adjustment", Account = "Income", Amount = -30, Date = new DateTime(2025, 1, 2) },
             new() { AccountingClass = "Fund Class", Type = "Payroll Check", Account = "Payroll: Wages", Amount = 10, Date = new DateTime(2025, 1, 2) },
-            new() { AccountingClass = "Fund Class", Type = "Payroll Adjustment Other", Account = "Income", Amount = 5, Date = new DateTime(2025, 1, 2) }
+            new() { AccountingClass = "Fund Class", Type = "Payroll Adjustment", Account = "Payroll Tax Payable", Amount = 200, Date = new DateTime(2025, 1, 2) },
+            new() { AccountingClass = "Fund Class", Type = "Expense", Account = "payroll tax payable", Amount = -100, Date = new DateTime(2025, 1, 2) },
+            new() { AccountingClass = "Fund Class", Account = "Payroll Tax Payable Other", Amount = 5, Date = new DateTime(2025, 1, 2) }
         };
 
         var result = processor.Process(account, rows);
         var forward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 1), 100m, new DateTime(2025, 1, 2));
-        var backward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 2), 95m, new DateTime(2025, 1, 1));
+        var backward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 2), 15m, new DateTime(2025, 1, 1));
 
-        Assert.Equal(95m, result.TotalBalance);
-        Assert.Equal(10m, result.ExpenseTotal);
-        Assert.Equal(5m, result.OtherTotal);
-        Assert.Equal(2, result.AllTransactions.Count);
-        Assert.Equal(95m, forward.TotalBalance);
+        Assert.Equal(15m, result.TotalBalance);
+        Assert.Equal(60m, result.ExpenseTotal);
+        Assert.Equal(-25m, result.OtherTotal);
+        Assert.Equal(4, result.AllTransactions.Count);
+        Assert.Equal(15m, forward.TotalBalance);
         Assert.Equal(100m, backward.TotalBalance);
-        Assert.Equal(2, forward.AllTransactions.Count);
-        Assert.Equal(2, backward.AllTransactions.Count);
+        Assert.Equal(4, forward.AllTransactions.Count);
+        Assert.Equal(4, backward.AllTransactions.Count);
     }
 
     [Fact]
