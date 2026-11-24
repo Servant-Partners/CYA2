@@ -135,7 +135,15 @@ The following matrix records the current implementation contract. A cache's regi
 | Import preview | Temporary uploaded preview and ownership metadata | Process-wide singleton | Never shareable across users | Preview ID, authenticated owner, import type | Maximum 15-minute retention with bounded preview capacity | Expiration/capacity cleanup | Removal after import, failure, abandonment, or expiration | Owner and current administrator authorization are required |
 | Import progress | Temporary import status and progress | Process-wide host service | Never shareable across users | Progress ID, authenticated owner | Maximum 15-minute retention for terminal/abandoned records | Expiration/cleanup | Completion, failure, abandonment, or expiration | Owner and current administrator authorization are required |
 
-Home (including the Admin Account Summaries dialog), Donations, Donors and Expenses restore the applied per-user range from session state, with the per-user selection cache used to hydrate a new session. Applied Home custom/visualization ranges and Donors All Dates are also saved to both stores. Home's fixed month/year cards remain independent; its selected-range summary and visualization reload for the selected account. All Dates keeps the Donors page's unfiltered donor query. Fact-cache keys and authorization checks are unchanged; shared, overflow and rebuild fact queries use inclusive calendar end dates, including records with a time on the end date.
+### Shared date-range selection
+
+Home (including the Admin Account Summaries dialog), Donations, Donors and Expenses use the same applied per-user date range and preset. The active circuit's session state is authoritative during navigation; applying a selection also writes the per-user memory cache. On hydration, the cached preference is copied only when the session is missing a start or end date. Session state is reset when the user changes. If no selection is available, the default is This Month. Unapplied custom date edits are not the shared selection.
+
+The preference cache defaults to a 24-hour absolute expiration and is lost on process restart; writing an unchanged range does not extend its expiration. It contains only the selection, not financial data or authorization. Financial services must still check access and use their normal generation and coverage rules. Switching accounts preserves the selected dates and reloads the selected-account results.
+
+Home synchronizes its custom summary and visualization selection, while its four fixed month/year cards retain their own periods. Monthly visualization donation and expense totals respect the selected range, including partial first and last months; normal-account balance points are cumulative as of each displayed period end. All Dates is available across these pages; Donors retains its unfiltered query for that preset rather than restricting results to the preset's nominal dates.
+
+Shared, overflow and rebuild fact queries include the entire selected calendar end date, including records with a time on that day. Fact-cache keys and authorization checks are unchanged.
 
 ### Current cache gaps and follow-up requirements
 
@@ -295,7 +303,7 @@ The shared snapshot represents a broad supported date range. A narrower request 
 
 The UI does not need to select a special canonical date-range label. The decision is based on date containment.
 
-Donation date ranges are normalized to start at midnight on the selected start date and end at the final tick of the selected end date before repository queries or authoritative fact loading. This preserves the UI's inclusive date semantics for `DATETIME` donation rows while retaining broad-window cache reuse.
+Donation and accounting fact queries include the full calendar end date by using its final tick as the repository upper bound; in-memory date filters compare calendar dates inclusively. This preserves the UI's inclusive semantics for `DATETIME` rows while retaining broad-window cache reuse. The maximum representable date is handled without overflowing.
 
 Correct behavior:
 
@@ -328,7 +336,7 @@ Use `IAccountFactDataService.GetAccountingDataAsync` for aggregate, expense-only
 
 Use `IAccountFactDataService.GetDonationDataAsync` for the normal account-range path. It combines shared broad-window donation facts with user-scoped overflow coverage, supplies subaccount metadata, and returns date-filtered, deduplicated facts. `DonorService` derives `All`, `Primary`, and valid explicit subaccount selections by filtering those facts in memory, hydrates current contacts, and caches the resulting donor summaries by funds signature and requested date range. Preserve repository-backed paths for `All Dates`, donor detail, search, and other unsupported request shapes.
 
-Primary includes the primary fund and its merged subfunds; All additionally includes separate subfunds. Explicit selections accept only separate subaccounts, and invalid selections return no rows. Donor exports revalidate account access and reuse this selection path. Intern selections use an intern-identity cache scope and name-based donation reads rather than shared fund selection.
+Primary includes the primary fund and its merged subfunds; All additionally includes separate subfunds. Explicit selections accept only separate subaccounts, and invalid selections return no rows. Donor exports revalidate account access and reuse this selection path. Intern selections use an intern-identity cache scope and exact, case-sensitive InternSourceId donation reads rather than display-name or shared fund selection.
 
 Donor IDs are global across funds, resolved from direct Constituent IDs, eligible third-party soft-credit recipient IDs, and unambiguous normalized-name matches when an applicable ID is blank. Equal direct and recipient IDs share an identity. Summaries group the already-authorized selected donations by shared DonorId, not display name; duplicate names remain distinct. Combined-fund summaries use each fund's latest stored frequency, or classify that fund's selected history when absent: matching frequencies retain their shared label, otherwise the summary displays Mixed. Mixed is summary-only, never a persisted gift classification. Missing-gift checks remain fund-specific, including for Mixed donors, without changing warning-only contact hydration. Summary keys, invalidation, authorization, and precaching schedules are unchanged. Fact caches preserve DonorId and soft-credit metadata; contact caches remain current-state projections keyed by DonorId. Donation publication and rollback invalidate both donation and contact generations because retained historical gifts can be relinked. Shared identity does not authorize donation access outside the selected account or intern scope.
 
