@@ -131,6 +131,35 @@ public sealed class ExpenseCalculationTests
     }
 
     [Fact]
+    public void PayrollAdjustments_AreExcludedFromForwardAndReverseBalanceCalculations()
+    {
+        var classification = new ExpenseClassificationService();
+        var processor = new AccountingTransactionProcessor(classification);
+        var reverse = new ReverseBalanceCalculationService(classification);
+        var account = new UserAccountContextAccount { AccountingClass = "Fund Class", AccountNumber = "123", BalanceAdjustment = 100m };
+        var rows = new List<AccountingRecord>
+        {
+            new() { AccountingClass = "Fund Class", Type = "Payroll Adjustment", Account = "Payroll: Wages", Amount = 50, Date = new DateTime(2025, 1, 2) },
+            new() { AccountingClass = "Fund Class", Type = "payroll adjustment", Account = "Income", Amount = -30, Date = new DateTime(2025, 1, 2) },
+            new() { AccountingClass = "Fund Class", Type = "Payroll Check", Account = "Payroll: Wages", Amount = 10, Date = new DateTime(2025, 1, 2) },
+            new() { AccountingClass = "Fund Class", Type = "Payroll Adjustment Other", Account = "Income", Amount = 5, Date = new DateTime(2025, 1, 2) }
+        };
+
+        var result = processor.Process(account, rows);
+        var forward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 1), 100m, new DateTime(2025, 1, 2));
+        var backward = reverse.CalculateFromEndOfDayAnchor(account, rows, new DateTime(2025, 1, 2), 95m, new DateTime(2025, 1, 1));
+
+        Assert.Equal(95m, result.TotalBalance);
+        Assert.Equal(10m, result.ExpenseTotal);
+        Assert.Equal(5m, result.OtherTotal);
+        Assert.Equal(2, result.AllTransactions.Count);
+        Assert.Equal(95m, forward.TotalBalance);
+        Assert.Equal(100m, backward.TotalBalance);
+        Assert.Equal(2, forward.AllTransactions.Count);
+        Assert.Equal(2, backward.AllTransactions.Count);
+    }
+
+    [Fact]
     public void PayrollClearingInsurance_IsExcludedFromBalanceCalculations()
     {
         var service = CreateCalculationService();
