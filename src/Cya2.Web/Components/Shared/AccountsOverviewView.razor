@@ -13,7 +13,14 @@
                  Class="accounts-overview-toolbar">
         <!-- Left: current view label -->
         <RadzenText TextStyle="TextStyle.Subtitle1">
-            @(showDonations12m ? Localizer["TotalDonationsLTM"] : Localizer["CurrentBalance"])
+            @if (showDonations12m)
+            {
+                <span title="@Localizer["LastTwelveMonths"]">@Localizer["TotalDonationsLTM"]</span>
+            }
+            else
+            {
+                @Localizer["CurrentBalance"]
+            }
         </RadzenText>
 
         <!-- Right: actions -->
